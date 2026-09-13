@@ -10,7 +10,7 @@ export const SCROLL_SPEED = 240;
 /** Squad sits this fraction of the view height up from the bottom. */
 export const SQUAD_SCREEN_FRAC = 0.22;
 
-export const START_BLUE = 10;
+export const START_BLUE = 16;
 export const MAX_BLUE = 4000;
 /** Only this many are ever drawn; past ~400 nobody can tell, and the HUD carries the truth. */
 export const MAX_BLUE_RENDER = 400;
@@ -23,8 +23,32 @@ export const MAX_RED = 1400;
 export const RED_SPEED_MIN = 110;
 export const RED_SPEED_MAX = 155;
 export const RED_RADIUS = 9;
-/** How hard reds steer toward the squad, as a fraction of their run speed. */
-export const RED_HOMING = 0.62;
+/**
+ * Weight on the lateral component of red pursuit. Below 1 they close the
+ * distance ahead of you before swinging in, so the swarm arrives through your
+ * guns instead of materialising on your flank where fixed-forward fire can
+ * never reach it.
+ */
+export const RED_LATERAL_WEIGHT = 0.6;
+/** Extra lateral gain per unit of distance ahead, capped by RED_ALIGN_MAX. */
+export const RED_ALIGN_RANGE = 350;
+export const RED_ALIGN_MAX = 1.1;
+/** How far behind the crowd's rear edge a red counts as having broken through. */
+export const BREAKTHROUGH_PAD = 12;
+/**
+ * Reds spawn in a band around the squad's current column rather than uniformly
+ * across the lane. The squad advances faster than reds run, so anything
+ * spawning on the far side can never intercept and simply falls behind — the
+ * swarm has to be in your path to be a swarm at all.
+ */
+export const RED_SPAWN_SPREAD = 340;
+/**
+ * The swarm's frontage tracks the crowd's own frontage. A 14-strong squad
+ * covers about 80 units of lane, so spawning reds across the full width would
+ * hand them free breakthroughs before the player has any width to defend with.
+ */
+export const RED_SPAWN_MIN_SPREAD = 95;
+export const RED_SPAWN_RADIUS_GAIN = 1.6;
 export const CONTACT_PAD = 6;
 
 export const MAX_BULLET = 1400;
@@ -37,12 +61,6 @@ export const BULLET_LIFE = 1.1;
  * minigun cadence would mean 5600 bullets/second and a slideshow.
  */
 export const MAX_EMITTERS = 26;
-/**
- * Volleys lead the nearest threat instead of always firing straight up. Without
- * this, any lateral move drops effective DPS to zero and standing still beats
- * playing — which kills the gate choice the whole game rests on.
- */
-export const AIM_MAX_ANGLE = 0.95;
 
 export interface Weapon {
   readonly name: string;
@@ -66,7 +84,7 @@ export const WEAPONS: readonly Weapon[] = [
 ];
 
 export const GATE_SPACING = 1900;
-export const GATE_FIRST = 1500;
+export const GATE_FIRST = 1100;
 
 export const MAX_CORPSE = 400;
 export const CORPSE_LIFE = 4.0;

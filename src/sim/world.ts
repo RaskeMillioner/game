@@ -1,13 +1,16 @@
 import { Grid } from '../core/grid.js';
 import { Rng } from '../core/rng.js';
 import {
-  AIM_MAX_ANGLE, ANCHOR_FOLLOW, BLUE_FOLLOW, BULLET_LIFE, BULLET_RADIUS, CONTACT_PAD, CORPSE_LIFE,
+  ANCHOR_FOLLOW, BLUE_FOLLOW, BREAKTHROUGH_PAD, BULLET_LIFE, BULLET_RADIUS, CONTACT_PAD, CORPSE_LIFE,
   LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
-  RED_HOMING, RED_RADIUS, RED_SPEED_MAX, RED_SPEED_MIN, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
+  RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, RED_SPEED_MAX, RED_SPEED_MIN, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
   START_BLUE, WEAPONS,
 } from './config.js';
 import { formationRadius, frontOrder, slotLag, slotX, slotY } from './formation.js';
 import { applyGate, buildGates, Gate, GATE_MID } from './gates.js';
+import {
+  buildObjectives, collectObjective, damageObjective, Objective, OBJECTIVE_H, OBJECTIVE_W,
+} from './objectives.js';
 import { Director } from './swarm.js';
 
 export type RunState = 'running' | 'dead';
@@ -31,7 +34,14 @@ export class World {
   weaponTier = 0;
 
   kills = 0;
+  /**
+   * Reds that broke through the crowd. Each one costs a blue, so this is a
+   * pressure gauge rather than a bug counter: it is the price of leaving part
+   * of the swarm unshot.
+   */
+  leaked = 0;
   gates: Gate[];
+  objectives: Objective[];
   /** Set for one frame when a gate fires, so the renderer can punch it up. */
   gateFlash = 0;
 
@@ -71,6 +81,7 @@ export class World {
     this.rng = new Rng(seed);
     this.viewH = viewH;
     this.gates = buildGates(this.rng, 14);
+    this.objectives = buildObjectives(this.rng, 12);
     this.corpseAge.fill(CORPSE_LIFE);
     this.resize(viewH);
   }
@@ -109,7 +120,9 @@ export class World {
     this.stepBullets(dt);
     this.grid.rebuild(this.redCount, this.redX, this.redY, -100, this.cameraY - 200);
     this.collideBullets();
+    this.collideObjectives();
     this.collideSquad();
+    this.resolveObjectives();
     this.stepCorpses(dt);
 
     if (this.count <= 0) {
@@ -173,7 +186,12 @@ export class World {
     const spawnY = this.cameraY + this.viewH + 60;
     for (let i = 0; i < n && this.redCount < MAX_RED; i++) {
       const j = this.redCount++;
-      this.redX[j] = this.rng.range(30, LANE_W - 30);
+      const frontage = Math.min(
+        RED_SPAWN_SPREAD,
+        Math.max(RED_SPAWN_MIN_SPREAD, this.radius * RED_SPAWN_RADIUS_GAIN + 70),
+      );
+      const bias = this.anchorX + this.rng.range(-frontage, frontage);
+      this.redX[j] = bias < 25 ? 25 : bias > LANE_W - 25 ? LANE_W - 25 : bias;
       this.redY[j] = spawnY + this.rng.range(0, 220);
       this.redSpeed[j] = this.rng.range(RED_SPEED_MIN, RED_SPEED_MAX);
       this.redOff[j] = this.rng.range(-1, 1);
@@ -181,24 +199,45 @@ export class World {
   }
 
   /**
-   * Reds converge on the squad rather than running straight down the lane. Without
-   * this they only threaten whichever column you happen to be standing in, and the
-   * swarm reads as weather instead of as something hunting you.
+   * Reds run at the squad, not down the screen. Pursuit is full 2D: the target
+   * is the crowd itself, so a red that drifts wide turns back in rather than
+   * sailing past. Each red keeps a lateral bias across the crowd's front so the
+   * swarm arrives as a wave instead of a single file.
    */
   private stepReds(dt: number): void {
-    const cullY = this.cameraY - 120;
+    const cullY = this.cameraY - 160;
     const ax = this.anchorX;
-    const spread = this.radius + 45;
+    const ay = this.anchorY;
+    const spread = this.radius * 0.7 + 26;
+    // Anything that gets behind the crowd has broken through the firing line.
+    const breachY = ay - this.radius - BREAKTHROUGH_PAD;
     for (let i = 0; i < this.redCount; i++) {
-      const speed = this.redSpeed[i];
-      const dx = ax + this.redOff[i] * spread - this.redX[i];
-      const lateral = speed * RED_HOMING;
-      const vx = dx > lateral * dt ? lateral : dx < -lateral * dt ? -lateral : dx / Math.max(dt, 1e-6);
-      this.redX[i] += vx * dt;
-      this.redY[i] -= speed * dt;
-      if (this.redY[i] < cullY) {
+      const tx = ax + this.redOff[i] * spread;
+      const dy = ay - this.redY[i];
+      // Interception, not naive pursuit: while there is still room ahead a red
+      // spends it lining up on the squad's column, and only charges once level.
+      // Closing the gap first just lands it alongside, where it can never catch
+      // up to a squad that advances faster than it runs.
+      const ahead = dy < 0 ? -dy : 0;
+      const gain = RED_LATERAL_WEIGHT + Math.min(RED_ALIGN_MAX, ahead / RED_ALIGN_RANGE);
+      const dx = (tx - this.redX[i]) * gain;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const step = this.redSpeed[i] * dt;
+      this.redX[i] += (dx / d) * step;
+      this.redY[i] += (dy / d) * step;
+      // A breakthrough is never free: it takes one blue down with it and dies
+      // there, so every red you fail to shoot in front of you is a body lost.
+      if (this.redY[i] < breachY || this.redY[i] < cullY) {
+        this.addCorpse(this.redX[i], this.redY[i], true);
+        this.addCorpse(this.redX[i], this.redY[i], false);
+        this.leaked++;
         this.removeRed(i);
         i--;
+        this.count--;
+        if (this.count <= 0) {
+          this.count = 0;
+          return;
+        }
       }
     }
   }
@@ -224,38 +263,10 @@ export class World {
     if (shots === 4) this.fireTimer = 0;
   }
 
-  /**
-   * Angle (from straight ahead) toward the nearest red in front of the squad.
-   * Clamped so volleys still read as forward fire rather than the crowd
-   * spinning to shoot sideways.
-   */
-  private aimAngle(): number {
-    let bestD2 = Infinity;
-    let bestX = 0;
-    let bestY = 0;
-    const ax = this.anchorX;
-    const ay = this.anchorY;
-    for (let i = 0; i < this.redCount; i++) {
-      const dy = this.redY[i] - ay;
-      if (dy < 0) continue;
-      const dx = this.redX[i] - ax;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < bestD2) {
-        bestD2 = d2;
-        bestX = dx;
-        bestY = dy;
-      }
-    }
-    if (bestD2 === Infinity) return 0;
-    const a = Math.atan2(bestX, Math.max(bestY, 1));
-    return a > AIM_MAX_ANGLE ? AIM_MAX_ANGLE : a < -AIM_MAX_ANGLE ? -AIM_MAX_ANGLE : a;
-  }
-
   private fireVolley(): void {
     const w = WEAPONS[this.weaponTier];
     const n = this.rendered;
     if (n === 0) return;
-    const aim = this.aimAngle();
     const emitters = Math.min(n, MAX_EMITTERS);
     // Damage scales with the TRUE count, not the drawn count, so growing past
     // the render cap still makes you stronger.
@@ -268,7 +279,9 @@ export class World {
       placed++;
       const ox = this.blueX[slot];
       const oy = this.blueY[slot];
-      const emitterAim = aim + this.rng.range(-0.07, 0.07);
+      // Fire is fixed forward: what you hit is decided by where you stand, which
+      // is what makes shooting an objective cost you swarm control.
+      const emitterAim = this.rng.range(-0.03, 0.03);
       for (let p = 0; p < w.pellets; p++) {
         if (this.bulletCount >= MAX_BULLET) return;
         const spread = emitterAim + (w.pellets > 1
@@ -357,6 +370,40 @@ export class World {
       w++;
     }
     this.redCount = w;
+  }
+
+  /** Bullets damage structures too, so aiming at one is aiming away from the swarm. */
+  private collideObjectives(): void {
+    const halfW = OBJECTIVE_W / 2;
+    for (const o of this.objectives) {
+      if (o.resolved || o.broken) continue;
+      const dy = o.y - this.anchorY;
+      if (dy < -OBJECTIVE_H || dy > 1400) continue;
+      for (let i = 0; i < this.bulletCount; i++) {
+        if (Math.abs(this.bulX[i] - o.x) > halfW) continue;
+        if (Math.abs(this.bulY[i] - o.y) > OBJECTIVE_H / 2) continue;
+        damageObjective(o, this.bulPierce[i]);
+        this.removeBullet(i);
+        i--;
+        if (o.broken) break;
+      }
+    }
+  }
+
+  /** Settles each objective's reward as the squad draws level with it. */
+  private resolveObjectives(): void {
+    for (const o of this.objectives) {
+      if (o.resolved || this.anchorY < o.y) continue;
+      const before = this.rendered;
+      const result = collectObjective(o, this.count, this.weaponTier);
+      this.count = result.count;
+      this.weaponTier = result.weaponTier;
+      this.seedNewSlots(before);
+      if (this.count > before) this.gateFlash = 0.35;
+    }
+    for (const o of this.objectives) {
+      if (o.flash > 0) o.flash = Math.max(0, o.flash - 1 / 30);
+    }
   }
 
   /** 1:1 attrition. A red that reaches the crowd takes exactly one blue with it. */
