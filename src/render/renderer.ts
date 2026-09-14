@@ -256,8 +256,7 @@ export class Renderer {
       ctx.globalAlpha = fade;
 
       const halves = [
-        { op: gate.left, x0: gate.cx - GATE_PANEL_W, x1: gate.cx },
-        { op: gate.right, x0: gate.cx, x1: gate.cx + GATE_PANEL_W },
+        { op: gate.op, x0: gate.cx - GATE_PANEL_W, x1: gate.cx + GATE_PANEL_W },
       ];
       for (const half of halves) {
         const baseL = proj.project(half.x0, gate.y);

@@ -7,7 +7,7 @@ import {
   START_BLUE, WEAPONS,
 } from './config.js';
 import { formationRadius, frontOrder, slotLag, slotX, slotY } from './formation.js';
-import { applyGate, buildGates, Gate, gateSide } from './gates.js';
+import { applyGate, buildGates, Gate, gateHit } from './gates.js';
 import {
   buildObjectives, collectObjective, damageObjective, Objective, OBJECTIVE_H, OBJECTIVE_W,
 } from './objectives.js';
@@ -174,9 +174,8 @@ export class World {
     for (const gate of this.gates) {
       if (gate.taken || this.anchorY < gate.y) continue;
       gate.taken = true;
-      const side = gateSide(gate, this.anchorX);
-      if (side === null) continue;
-      const op = side === 'left' ? gate.left : gate.right;
+      if (!gateHit(gate, this.anchorX)) continue;
+      const op = gate.op;
       const before = this.rendered;
       const result = applyGate(op, this.count);
       this.count = result.count;

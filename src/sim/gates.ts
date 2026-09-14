@@ -10,25 +10,23 @@ export interface GateOp {
 
 export interface Gate {
   readonly y: number;
-  /** Centre of the gate pair. The panels straddle it, one either side. */
+  /** Centre of the single panel. */
   readonly cx: number;
-  readonly left: GateOp;
-  readonly right: GateOp;
+  readonly op: GateOp;
   taken: boolean;
 }
 
-/** Width of a single panel. The pair covers far less than the lane, so both can be missed. */
+/** Half-width of a gate panel. Narrow enough that a gate is easy to slip past. */
 export const GATE_PANEL_W = 95;
 
 /**
- * Which half the squad is passing through, or null if it slipped by outside the
- * pair entirely. Gates no longer span the lane, so taking one is a decision the
- * player has to actually steer into rather than an unavoidable toll.
+ * Whether the squad is passing through the panel. A gate offers one thing, so
+ * the decision is take it or dodge it: a bad gate is a hazard to steer around
+ * rather than the lesser half of a forced choice.
  */
-export function gateSide(gate: Gate, x: number): 'left' | 'right' | null {
+export function gateHit(gate: Gate, x: number): boolean {
   const d = x - gate.cx;
-  if (d < -GATE_PANEL_W || d > GATE_PANEL_W) return null;
-  return d < 0 ? 'left' : 'right';
+  return d > -GATE_PANEL_W && d < GATE_PANEL_W;
 }
 
 export function gateLabel(op: GateOp): string {
@@ -69,31 +67,33 @@ export function buildGates(rng: Rng, count: number): Gate[] {
   let tier = 1;
   for (let i = 0; i < count; i++) {
     const y = GATE_FIRST + i * GATE_SPACING;
-    let left: GateOp;
-    let right: GateOp;
+    let op: GateOp;
 
+    const roll = rng.next();
+    // The opening gate is never a hazard. With one option per gate there is no
+    // second door to take instead, and a flat subtraction on a starting squad
+    // is simply an unavoidable death two seconds in.
+    const hazardChance = i === 0 ? 0 : Math.min(0.34, 0.10 + i * 0.04);
     if (i > 0 && i % 3 === 2 && tier < WEAPONS.length) {
-      // Weapon vs. bodies: the choice the whole game is built around.
-      const bodies = 60 + i * 55;
-      left = { kind: 'weapon', value: tier };
-      right = { kind: 'add', value: bodies };
+      op = { kind: 'weapon', value: tier };
       tier++;
-    } else if (rng.next() < Math.min(0.62, 0.12 + i * 0.06)) {
-      // A real trap: one side actively costs you.
-      left = { kind: 'mul', value: 3 };
-      right = rng.next() < 0.5
-        ? { kind: 'sub', value: 25 + i * 30 }
-        : { kind: 'div', value: 2 };
+    } else if (roll < hazardChance) {
+      // Hazards stay proportional rather than absolute: a division always
+      // hurts in step with what you have, where a fixed subtraction is
+      // trivial when large and lethal when small.
+      op = rng.next() < 0.6
+        ? { kind: 'div', value: 2 }
+        : { kind: 'sub', value: 25 + i * 30 };
+    } else if (roll < 0.72) {
+      op = { kind: 'mul', value: rng.next() < 0.3 ? 4 : 3 };
     } else {
-      left = { kind: 'mul', value: rng.next() < 0.3 ? 4 : 3 };
-      right = { kind: 'add', value: 55 + i * 60 };
+      op = { kind: 'add', value: 95 + i * 85 };
     }
 
-    if (rng.next() < 0.5) [left, right] = [right, left];
-    // Kept near the lane's centre so both panels stay inside the anchor's clamp
-    // once the crowd is wide, but shifted enough that the player has to look.
-    const cx = LANE_W / 2 + rng.range(-95, 95);
-    gates.push({ y, cx, left, right, taken: false });
+    // The opening gate sits dead centre: a player who has not yet learned that
+    // gates are dodgeable should not lose the run to missing the first one.
+    const cx = i === 0 ? LANE_W / 2 : LANE_W / 2 + rng.range(-135, 135);
+    gates.push({ y, cx, op, taken: false });
   }
   return gates;
 }

@@ -14,10 +14,7 @@ function run(seed: number, steps: number, drive?: (w: World, i: number) => void)
   return w;
 }
 
-/**
- * Steers into the better or worse half of the next gate. Note there is no way to
- * skip a gate — they span the lane — so "never grow" is not a reachable state.
- */
+/** Steers into the next gate if it is worth taking, and around it if not. */
 function seekGate(preferGood: boolean) {
   return (w: World): void => {
     const next = w.gates.find((g) => !g.taken && g.y > w.anchorY - 200);
@@ -25,10 +22,14 @@ function seekGate(preferGood: boolean) {
       w.targetX = LANE_W / 2;
       return;
     }
-    const leftGood = gateIsGood(next.left);
-    const rightGood = gateIsGood(next.right);
-    const goLeft = leftGood !== rightGood ? leftGood === preferGood : preferGood;
-    w.targetX = next.cx + (goLeft ? -GATE_PANEL_W : GATE_PANEL_W) * 0.5;
+    // With one option per gate the decision is take it or dodge it, so half the
+    // skill is steering clear of a panel that would cost you.
+    if (gateIsGood(next.op) === preferGood) {
+      w.targetX = next.cx;
+      return;
+    }
+    const room = next.cx > LANE_W / 2 ? -1 : 1;
+    w.targetX = next.cx + room * (GATE_PANEL_W + 130);
   };
 }
 

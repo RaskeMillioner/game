@@ -17,7 +17,7 @@ const MAX_SECONDS = 150;
 
 type Strategy = (w: World, t: number) => void;
 
-/** Steers to whichever side of the next gate is better (or worse, if inverted). */
+/** Steers into the next gate if it is worth taking, and around it if not. */
 function gateSeeker(preferGood: boolean): Strategy {
   return (w) => {
     const next = w.gates.find((g) => !g.taken && g.y > w.anchorY - 200);
@@ -25,21 +25,15 @@ function gateSeeker(preferGood: boolean): Strategy {
       w.targetX = LANE_W / 2;
       return;
     }
-    const leftGood = gateIsGood(next.left);
-    const rightGood = gateIsGood(next.right);
-    let goLeft: boolean;
-    if (leftGood !== rightGood) goLeft = leftGood === preferGood;
-    else goLeft = (scoreOp(next.left, w.count) >= scoreOp(next.right, w.count)) === preferGood;
-    w.targetX = next.cx + (goLeft ? -GATE_PANEL_W : GATE_PANEL_W) * 0.5;
+    // With one option per gate the decision is take it or dodge it, so half the
+    // skill is steering clear of a panel that would cost you.
+    if (gateIsGood(next.op) === preferGood) {
+      w.targetX = next.cx;
+      return;
+    }
+    const room = next.cx > LANE_W / 2 ? -1 : 1;
+    w.targetX = next.cx + room * (GATE_PANEL_W + 130);
   };
-}
-
-/** Value of an op in bodies-equivalent, which requires knowing the current count. */
-function scoreOp(op: { kind: string; value: number }, count: number): number {
-  if (op.kind === 'mul') return count * (op.value - 1);
-  if (op.kind === 'add') return op.value;
-  if (op.kind === 'weapon') return count * 0.6;
-  return -1e9;
 }
 
 /**
