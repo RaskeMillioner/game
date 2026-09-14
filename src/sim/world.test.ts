@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_RED, START_BLUE } from './config.js';
-import { gateIsGood, GATE_MID } from './gates.js';
+import { gateIsGood, GATE_PANEL_W } from './gates.js';
 import { World } from './world.js';
 
 const VIEW_H = 1560;
@@ -28,7 +28,20 @@ function seekGate(preferGood: boolean) {
     const leftGood = gateIsGood(next.left);
     const rightGood = gateIsGood(next.right);
     const goLeft = leftGood !== rightGood ? leftGood === preferGood : preferGood;
-    w.targetX = goLeft ? GATE_MID * 0.5 : GATE_MID * 1.5;
+    w.targetX = next.cx + (goLeft ? -GATE_PANEL_W : GATE_PANEL_W) * 0.5;
+  };
+}
+
+/** Diverts onto a nearby objective, falling back to gate seeking. */
+function seekObjectives(commit: number) {
+  const fallback = seekGate(true);
+  return (w: World): void => {
+    const o = w.objectives.find((x) => !x.resolved && x.y > w.anchorY - 50);
+    if (o && !o.broken && o.y - w.anchorY < commit) {
+      w.targetX = o.x;
+      return;
+    }
+    fallback(w);
   };
 }
 
@@ -82,13 +95,28 @@ describe('World', () => {
     return total / seeds;
   }
 
-  it('makes gate choice the dominant decision', () => {
-    // Compared across a population: any single run can be lost to an unlucky
-    // opening clump regardless of how well it is played.
+  it('still rewards taking the better gate', () => {
+    // Gates are occasional and narrow now, so they punctuate a run rather than
+    // driving it: the margin here is real but no longer the whole game. What
+    // carries a run is objective play, asserted separately below.
     const good = meanPeak(seekGate(true), 14);
     const bad = meanPeak(seekGate(false), 14);
-    expect(good).toBeGreaterThan(START_BLUE * 10);
-    expect(good).toBeGreaterThan(bad * 5);
+    expect(good).toBeGreaterThan(START_BLUE * 4);
+    expect(good).toBeGreaterThan(bad * 1.3);
+  }, 30_000);
+
+  it('makes opportunistic objective play the strongest line', () => {
+    const withObjectives = meanPeak(seekObjectives(900), 14);
+    const gatesOnly = meanPeak(seekGate(true), 14);
+    expect(withObjectives).toBeGreaterThan(gatesOnly * 1.5);
+  }, 30_000);
+
+  it('punishes over-committing to objectives', () => {
+    // Locking onto a distant structure means sailing past the narrow gates,
+    // and gates are where the large multipliers live.
+    const greedy = meanPeak(seekObjectives(2600), 14);
+    const opportunistic = meanPeak(seekObjectives(900), 14);
+    expect(greedy).toBeLessThan(opportunistic * 0.6);
   }, 30_000);
 
   it('overruns a player who consistently takes the worse gate', () => {

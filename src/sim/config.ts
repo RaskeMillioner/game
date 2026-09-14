@@ -83,8 +83,8 @@ export const WEAPONS: readonly Weapon[] = [
   { name: 'MINIGUN', rate: 14.0, pellets: 1, spread: 0.06, speed: 1200, power: 0.54 },
 ];
 
-export const GATE_SPACING = 1900;
-export const GATE_FIRST = 1100;
+export const GATE_SPACING = 3400;
+export const GATE_FIRST = 1250;
 
 export const MAX_CORPSE = 400;
 export const CORPSE_LIFE = 4.0;

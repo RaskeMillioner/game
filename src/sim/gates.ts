@@ -10,9 +10,25 @@ export interface GateOp {
 
 export interface Gate {
   readonly y: number;
+  /** Centre of the gate pair. The panels straddle it, one either side. */
+  readonly cx: number;
   readonly left: GateOp;
   readonly right: GateOp;
   taken: boolean;
+}
+
+/** Width of a single panel. The pair covers far less than the lane, so both can be missed. */
+export const GATE_PANEL_W = 95;
+
+/**
+ * Which half the squad is passing through, or null if it slipped by outside the
+ * pair entirely. Gates no longer span the lane, so taking one is a decision the
+ * player has to actually steer into rather than an unavoidable toll.
+ */
+export function gateSide(gate: Gate, x: number): 'left' | 'right' | null {
+  const d = x - gate.cx;
+  if (d < -GATE_PANEL_W || d > GATE_PANEL_W) return null;
+  return d < 0 ? 'left' : 'right';
 }
 
 export function gateLabel(op: GateOp): string {
@@ -58,23 +74,26 @@ export function buildGates(rng: Rng, count: number): Gate[] {
 
     if (i > 0 && i % 3 === 2 && tier < WEAPONS.length) {
       // Weapon vs. bodies: the choice the whole game is built around.
-      const bodies = 25 + i * 12;
+      const bodies = 60 + i * 55;
       left = { kind: 'weapon', value: tier };
       right = { kind: 'add', value: bodies };
       tier++;
     } else if (rng.next() < Math.min(0.62, 0.12 + i * 0.06)) {
       // A real trap: one side actively costs you.
-      left = { kind: 'mul', value: 2 };
+      left = { kind: 'mul', value: 3 };
       right = rng.next() < 0.5
-        ? { kind: 'sub', value: 15 + i * 8 }
+        ? { kind: 'sub', value: 25 + i * 30 }
         : { kind: 'div', value: 2 };
     } else {
-      left = { kind: 'mul', value: rng.next() < 0.25 ? 3 : 2 };
-      right = { kind: 'add', value: 20 + i * 15 };
+      left = { kind: 'mul', value: rng.next() < 0.3 ? 4 : 3 };
+      right = { kind: 'add', value: 55 + i * 60 };
     }
 
     if (rng.next() < 0.5) [left, right] = [right, left];
-    gates.push({ y, left, right, taken: false });
+    // Kept near the lane's centre so both panels stay inside the anchor's clamp
+    // once the crowd is wide, but shifted enough that the player has to look.
+    const cx = LANE_W / 2 + rng.range(-95, 95);
+    gates.push({ y, cx, left, right, taken: false });
   }
   return gates;
 }

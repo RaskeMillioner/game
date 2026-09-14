@@ -7,7 +7,7 @@ import {
   START_BLUE, WEAPONS,
 } from './config.js';
 import { formationRadius, frontOrder, slotLag, slotX, slotY } from './formation.js';
-import { applyGate, buildGates, Gate, GATE_MID } from './gates.js';
+import { applyGate, buildGates, Gate, gateSide } from './gates.js';
 import {
   buildObjectives, collectObjective, damageObjective, Objective, OBJECTIVE_H, OBJECTIVE_W,
 } from './objectives.js';
@@ -81,7 +81,7 @@ export class World {
     this.rng = new Rng(seed);
     this.viewH = viewH;
     this.gates = buildGates(this.rng, 14);
-    this.objectives = buildObjectives(this.rng, 12);
+    this.objectives = buildObjectives(this.rng, 20, this.gates.map((g) => g.y));
     this.corpseAge.fill(CORPSE_LIFE);
     this.resize(viewH);
   }
@@ -174,7 +174,9 @@ export class World {
     for (const gate of this.gates) {
       if (gate.taken || this.anchorY < gate.y) continue;
       gate.taken = true;
-      const op = this.anchorX < GATE_MID ? gate.left : gate.right;
+      const side = gateSide(gate, this.anchorX);
+      if (side === null) continue;
+      const op = side === 'left' ? gate.left : gate.right;
       const before = this.rendered;
       const result = applyGate(op, this.count);
       this.count = result.count;

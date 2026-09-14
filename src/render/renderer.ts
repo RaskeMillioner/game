@@ -1,9 +1,10 @@
 import {
   BULLET_RADIUS, CORPSE_LIFE, LANE_W, MAX_BLUE_RENDER, MAX_CORPSE, WEAPONS,
 } from '../sim/config.js';
-import { type Gate, gateIsGood, gateLabel, GATE_MID } from '../sim/gates.js';
+import { type Gate, GATE_PANEL_W, gateIsGood, gateLabel } from '../sim/gates.js';
 import {
-  multiplierOf, type Objective, OBJECTIVE_H, OBJECTIVE_W, type ObjectiveKind,
+  objectiveCaption, objectiveLabel, type Objective, OBJECTIVE_H, OBJECTIVE_W,
+  type ObjectiveKind,
 } from '../sim/objectives.js';
 import type { World } from '../sim/world.js';
 import { CAM_HEIGHT, FAR_DZ, FOCAL, NEAR, Projector } from './projection.js';
@@ -29,7 +30,24 @@ const COL_SKY_HORIZON = '#20212f';
 
 const STRIPE = 200;
 const STRIPE_THICK = 42;
-const GATE_HEIGHT = 220;
+const GATE_HEIGHT = 130;
+/**
+ * Structures fade out over the last stretch before the camera reaches them.
+ * Projected size grows without bound as dz approaches zero, so a gate you are
+ * about to pass through otherwise balloons across the whole screen — and by
+ * then the choice is already made, so there is nothing left to read.
+ */
+// The squad plane sits at dz ~603 (CAM_BACK + viewH*SQUAD_SCREEN_FRAC), so a
+// gate is fully readable right up to the moment the crowd reaches it and only
+// then fades, rather than sailing on toward the lens at screen-filling size.
+const FADE_NEAR = 400;
+const FADE_FULL = 620;
+
+function nearFade(dz: number): number {
+  if (dz >= FADE_FULL) return 1;
+  if (dz <= FADE_NEAR) return 0;
+  return (dz - FADE_NEAR) / (FADE_FULL - FADE_NEAR);
+}
 
 // Unprojected stickman dimensions (world units); scaled per-unit by projected `scale`.
 const BODY_HW = 3.2;
@@ -222,7 +240,7 @@ export class Renderer {
     order.sort((a, b) => b.dz - a.dz);
     for (const item of order) {
       if (item.gate) this.drawGate(item.gate);
-      else if (item.objective) this.drawObjective(item.objective);
+      else if (item.objective) this.drawObjective(item.objective, w.weaponTier);
     }
   }
 
@@ -232,10 +250,14 @@ export class Renderer {
     {
       const dz = proj.dz(gate.y);
       if (dz < -50 || dz > FAR_DZ) return;
+      const fade = nearFade(dz);
+      if (fade <= 0.01) return;
+      ctx.save();
+      ctx.globalAlpha = fade;
 
       const halves = [
-        { op: gate.left, x0: 0, x1: GATE_MID },
-        { op: gate.right, x0: GATE_MID, x1: LANE_W },
+        { op: gate.left, x0: gate.cx - GATE_PANEL_W, x1: gate.cx },
+        { op: gate.right, x0: gate.cx, x1: gate.cx + GATE_PANEL_W },
       ];
       for (const half of halves) {
         const baseL = proj.project(half.x0, gate.y);
@@ -276,6 +298,7 @@ export class Renderer {
           44 * scale,
         );
       }
+      ctx.restore();
     }
   }
 
@@ -283,17 +306,24 @@ export class Renderer {
    * Objectives as upright billboards to one side of the lane: a distinct
    * silhouette per kind, an HP/charge bar, and a clear broken state.
    */
-  private drawObjective(o: Objective): void {
+  private drawObjective(o: Objective, weaponTier: number): void {
     const ctx = this.ctx;
     const proj = this.projector;
     {
       const dz = proj.dz(o.y);
       if (dz < -50 || dz > FAR_DZ) return;
+      const fade = nearFade(dz);
+      if (fade <= 0.01) return;
 
       const base = proj.project(o.x, o.y);
       const scale = base.scale;
       const halfW = (OBJECTIVE_W / 2) * scale;
+      // Every cull happens before save(): an early return past it leaks canvas
+      // state, and a leaked globalAlpha silently dims everything drawn after.
       if (base.x + halfW < 0 || base.x - halfW > LANE_W) return;
+
+      ctx.save();
+      ctx.globalAlpha = fade;
 
       const flash = o.flash;
       const brokenFlat = o.broken; // weapon/recruit only; multiplier never breaks
@@ -324,21 +354,30 @@ export class Renderer {
         ctx.fillRect(leftX, barY, barW * Math.max(0, Math.min(1, frac)), barH);
       }
 
-      if (o.kind === 'multiplier' && !brokenFlat) {
-        const mult = multiplierOf(o);
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#faf6ff';
+      // Every structure states what it gives. A silhouette alone does not tell
+      // the player whether diverting fire onto it is worth the swarm they let
+      // through, which is the entire decision being asked of them.
+      const label = brokenFlat ? 'TAKEN' : objectiveLabel(o, weaponTier);
+      const panelW = (rightX - leftX) * 0.9;
+      const panelH = Math.abs(baseY - topY);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = brokenFlat ? '#7c8394' : '#0d0d12';
+      fitText(ctx, label, baseX, baseY - panelH * 0.55, panelW, panelH * 0.42, 34 * scale);
+
+      if (!brokenFlat) {
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
         fitText(
           ctx,
-          `×${mult.toFixed(1)}`,
+          objectiveCaption(o),
           baseX,
-          (baseY + topY) / 2,
-          (rightX - leftX) * 0.86,
-          Math.abs(baseY - topY) * 0.5,
-          30 * scale,
+          topY - Math.max(6, 20 * scale),
+          panelW * 1.1,
+          Math.max(5, 15 * scale),
+          15 * scale,
         );
       }
+      ctx.restore();
     }
   }
 

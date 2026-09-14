@@ -7,7 +7,7 @@
  *     --outfile=.probe.mjs && node .probe.mjs
  */
 import { LANE_W } from '../sim/config.js';
-import { gateIsGood, GATE_MID } from '../sim/gates.js';
+import { gateIsGood, GATE_PANEL_W } from '../sim/gates.js';
 import { multiplierOf } from '../sim/objectives.js';
 import { World } from '../sim/world.js';
 
@@ -30,7 +30,7 @@ function gateSeeker(preferGood: boolean): Strategy {
     let goLeft: boolean;
     if (leftGood !== rightGood) goLeft = leftGood === preferGood;
     else goLeft = (scoreOp(next.left, w.count) >= scoreOp(next.right, w.count)) === preferGood;
-    w.targetX = goLeft ? GATE_MID * 0.5 : GATE_MID * 1.5;
+    w.targetX = next.cx + (goLeft ? -GATE_PANEL_W : GATE_PANEL_W) * 0.5;
   };
 }
 
