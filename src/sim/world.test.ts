@@ -123,3 +123,76 @@ describe('World', () => {
     expect(w.anchorX).toBeLessThan(LANE_W);
   });
 });
+
+describe('red pursuit', () => {
+  it('brings reds onto the squad instead of past it', () => {
+    // Regression: reds used to descend at a constant rate regardless of where
+    // the squad was, so most of them sailed by and were never a threat.
+    const w = run(21, 60 * 40, (world) => {
+      world.targetX = LANE_W * 0.25;
+    });
+    const resolved = w.kills + w.leaked;
+    expect(resolved).toBeGreaterThan(50);
+    expect(w.leaked / resolved).toBeLessThan(0.1);
+  });
+
+  it('closes on a squad parked far from the spawn column', () => {
+    const w = new World(4, VIEW_H);
+    w.targetX = 60;
+    w.anchorX = 60;
+    for (let i = 0; i < 90; i++) w.step(1 / 60);
+    expect(w.redCount).toBeGreaterThan(0);
+    let near = 0;
+    for (let i = 0; i < w.redCount; i++) {
+      if (Math.abs(w.redX[i] - w.anchorX) < 220) near++;
+    }
+    expect(near / w.redCount).toBeGreaterThan(0.5);
+  });
+});
+
+describe('objectives', () => {
+  it('breaks under sustained fire and pays out', () => {
+    const w = new World(11, VIEW_H);
+    w.count = 260;
+    const target = w.objectives.find((o) => o.kind === 'recruit');
+    expect(target).toBeDefined();
+    if (!target) return;
+    const before = w.count;
+    while (w.anchorY < target.y && w.state === 'running') {
+      w.targetX = target.x;
+      w.step(1 / 60);
+    }
+    expect(target.broken).toBe(true);
+    expect(target.resolved).toBe(true);
+    expect(w.count).toBeGreaterThan(before - 100 + target.value / 2);
+  });
+
+  it('charges a multiplier board rather than breaking it', () => {
+    const w = new World(11, VIEW_H);
+    w.count = 260;
+    const board = w.objectives.find((o) => o.kind === 'multiplier');
+    expect(board).toBeDefined();
+    if (!board) return;
+    while (w.anchorY < board.y && w.state === 'running') {
+      w.targetX = board.x;
+      w.step(1 / 60);
+    }
+    expect(board.broken).toBe(false);
+    expect(board.hp).toBeLessThan(board.maxHp);
+    expect(board.resolved).toBe(true);
+  });
+
+  it('leaves objectives intact when the squad never lines up on them', () => {
+    const w = new World(11, VIEW_H);
+    w.count = 260;
+    const board = w.objectives.find((o) => o.kind === 'weapon');
+    expect(board).toBeDefined();
+    if (!board) return;
+    const away = board.x < LANE_W / 2 ? LANE_W - 40 : 40;
+    while (w.anchorY < board.y && w.state === 'running') {
+      w.targetX = away;
+      w.step(1 / 60);
+    }
+    expect(board.broken).toBe(false);
+  });
+});
