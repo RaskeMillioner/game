@@ -1,7 +1,7 @@
 import { Rng } from '../core/rng.js';
-import { GATE_FIRST, GATE_SPACING, LANE_W, MAX_BLUE, WEAPONS } from './config.js';
+import { GATE_FIRST, GATE_SPACING, LANE_W, MAX_BLUE } from './config.js';
 
-export type GateKind = 'mul' | 'add' | 'sub' | 'div' | 'weapon';
+export type GateKind = 'mul' | 'add' | 'sub' | 'div';
 
 export interface GateOp {
   readonly kind: GateKind;
@@ -35,7 +35,6 @@ export function gateLabel(op: GateOp): string {
     case 'div': return `÷${op.value}`;
     case 'add': return `+${op.value}`;
     case 'sub': return `−${op.value}`;
-    case 'weapon': return WEAPONS[op.value].name;
   }
 }
 
@@ -53,7 +52,6 @@ export function applyGate(op: GateOp, count: number): { count: number; weaponTie
     case 'div': return { count: Math.max(0, Math.floor(count / op.value)), weaponTier: null };
     case 'add': return { count: Math.min(MAX_BLUE, count + op.value), weaponTier: null };
     case 'sub': return { count: Math.max(0, count - op.value), weaponTier: null };
-    case 'weapon': return { count, weaponTier: op.value };
   }
 }
 
@@ -64,7 +62,6 @@ export function applyGate(op: GateOp, count: number): { count: number; weaponTie
  */
 export function buildGates(rng: Rng, count: number): Gate[] {
   const gates: Gate[] = [];
-  let tier = 1;
   for (let i = 0; i < count; i++) {
     const y = GATE_FIRST + i * GATE_SPACING;
     let op: GateOp;
@@ -74,10 +71,7 @@ export function buildGates(rng: Rng, count: number): Gate[] {
     // second door to take instead, and a flat subtraction on a starting squad
     // is simply an unavoidable death two seconds in.
     const hazardChance = i === 0 ? 0 : Math.min(0.34, 0.10 + i * 0.04);
-    if (i > 0 && i % 3 === 2 && tier < WEAPONS.length) {
-      op = { kind: 'weapon', value: tier };
-      tier++;
-    } else if (roll < hazardChance) {
+    if (roll < hazardChance) {
       // Hazards stay proportional rather than absolute: a division always
       // hurts in step with what you have, where a fixed subtraction is
       // trivial when large and lethal when small.

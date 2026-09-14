@@ -1,7 +1,7 @@
 import { Rng } from '../core/rng.js';
 import { LANE_W, MAX_BLUE, WEAPONS } from './config.js';
 
-export type ObjectiveKind = 'weapon' | 'recruit' | 'multiplier';
+export type ObjectiveKind = 'weapon' | 'recruit';
 
 /**
  * A shootable structure in the lane. Objectives compete with the swarm for the
@@ -13,7 +13,7 @@ export interface Objective {
   readonly x: number;
   readonly y: number;
   readonly maxHp: number;
-  /** Weapon tier granted, bodies freed, or peak multiplier depending on kind. */
+  /** Weapon tiers granted, or bodies freed, depending on kind. */
   readonly value: number;
   hp: number;
   broken: boolean;
@@ -36,20 +36,8 @@ export const MIN_GATE_GAP = 750;
 export const OBJECTIVE_SPACING = 1750;
 
 /**
- * Multiplier boards never "break": damage charges them, and the multiplier they
- * are holding when you pass is what you get. Rewards committing hard rather
- * than landing one shot.
- */
-export function multiplierOf(o: Objective): number {
-  if (o.kind !== 'multiplier') return 1;
-  const t = Math.min(1, 1 - o.hp / o.maxHp);
-  return 1 + t * (o.value - 1);
-}
-
-/**
  * What this structure gives you, as the player needs to read it: the weapon it
- * actually grants rather than "+1 tier", the bodies it frees, or the multiplier
- * the board is currently holding.
+ * actually grants rather than "+1 tier", or the bodies it frees.
  */
 export function objectiveLabel(o: Objective, weaponTier: number): string {
   switch (o.kind) {
@@ -57,8 +45,6 @@ export function objectiveLabel(o: Objective, weaponTier: number): string {
       return WEAPONS[Math.min(WEAPONS.length - 1, weaponTier + o.value)].name;
     case 'recruit':
       return `+${o.value}`;
-    case 'multiplier':
-      return `\u00d7${multiplierOf(o).toFixed(1)}`;
   }
 }
 
@@ -67,7 +53,6 @@ export function objectiveCaption(o: Objective): string {
   switch (o.kind) {
     case 'weapon': return 'WEAPON';
     case 'recruit': return 'RECRUITS';
-    case 'multiplier': return 'BOOST';
   }
 }
 
@@ -76,10 +61,8 @@ export function damageObjective(o: Objective, amount: number): void {
   o.hp -= amount;
   if (o.hp <= 0) {
     o.hp = 0;
-    if (o.kind !== 'multiplier') {
-      o.broken = true;
-      o.flash = 1;
-    }
+    o.broken = true;
+    o.flash = 1;
   }
 }
 
@@ -99,8 +82,6 @@ export function collectObjective(
       return o.broken
         ? { count: Math.min(MAX_BLUE, count + o.value), weaponTier }
         : { count, weaponTier };
-    case 'multiplier':
-      return { count: Math.min(MAX_BLUE, Math.floor(count * multiplierOf(o))), weaponTier };
   }
 }
 
@@ -121,10 +102,12 @@ export function buildObjectives(rng: Rng, count: number, gateYs: readonly number
     return y;
   };
   for (let i = 0; i < count; i++) {
-    const kind: ObjectiveKind = i % 3 === 0 ? 'weapon' : i % 3 === 1 ? 'multiplier' : 'recruit';
+    // Weapons are now the only route to a better gun, so crates alternate with
+    // pods rather than competing with a third structure for lane space.
+    const kind: ObjectiveKind = i % 3 === 0 ? 'weapon' : 'recruit';
     const side = rng.next() < 0.5 ? 0.22 : 0.78;
-    const hp = kind === 'multiplier' ? 420 + i * 330 : 240 + i * 240;
-    const value = kind === 'weapon' ? 1 : kind === 'recruit' ? 40 + i * 30 : 3;
+    const hp = 240 + i * 240;
+    const value = kind === 'weapon' ? 1 : 55 + i * 48;
     out.push({
       kind,
       x: LANE_W * side,

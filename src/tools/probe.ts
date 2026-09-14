@@ -8,7 +8,6 @@
  */
 import { LANE_W } from '../sim/config.js';
 import { gateIsGood, GATE_PANEL_W } from '../sim/gates.js';
-import { multiplierOf } from '../sim/objectives.js';
 import { World } from '../sim/world.js';
 
 const VIEW_H = 1560;
@@ -63,7 +62,7 @@ const strategies: Record<string, Strategy> = {
 
 interface Result {
   seconds: number; kills: number; peak: number; died: boolean;
-  broken: number; passed: number; mult: number; leak: number;
+  broken: number; passed: number; leak: number;
 }
 
 function runOne(strategy: Strategy, seed: number): Result {
@@ -79,15 +78,10 @@ function runOne(strategy: Strategy, seed: number): Result {
     if (w.state === 'dead') break;
   }
   const seen = w.objectives.filter((o) => o.resolved);
-  const boards = seen.filter((o) => o.kind === 'multiplier');
-  const mult = boards.length
-    ? boards.reduce((a, o) => a + multiplierOf(o), 0) / boards.length
-    : 1;
   return {
     seconds: t, kills: w.kills, peak, died: w.state === 'dead',
     broken: seen.filter((o) => o.broken).length,
     passed: seen.length,
-    mult,
     leak: w.kills + w.leaked > 0 ? w.leaked / (w.kills + w.leaked) : 0,
   };
 }
@@ -96,7 +90,7 @@ const avg = (rs: Result[], f: (r: Result) => number): number =>
   rs.reduce((a, r) => a + f(r), 0) / rs.length;
 
 const RUNS = 60;
-console.log(`strategy     survived(s)  median  died%   peak squad   kills  obj brk/seen  avg board  leak%`);
+console.log(`strategy     survived(s)  median  died%   peak squad   kills  obj brk/seen  leak%`);
 for (const [name, strategy] of Object.entries(strategies)) {
   const results: Result[] = [];
   for (let s = 0; s < RUNS; s++) results.push(runOne(strategy, s * 7919 + 13));
@@ -110,7 +104,7 @@ for (const [name, strategy] of Object.entries(strategies)) {
     `${name.padEnd(12)} ${mean.toFixed(1).padStart(10)} ${median.toFixed(1).padStart(7)} ` +
     `${diedPct.toFixed(0).padStart(5)}% ${String(peak).padStart(11)} ${String(kills).padStart(7)}` +
     `  ${avg(results, (r) => r.broken).toFixed(1)}/${avg(results, (r) => r.passed).toFixed(1)}` +
-    `        x${avg(results, (r) => r.mult).toFixed(2)}  ${(avg(results, (r) => r.leak) * 100).toFixed(1)}%`,
+    `  ${(avg(results, (r) => r.leak) * 100).toFixed(1)}%`,
   );
 }
 

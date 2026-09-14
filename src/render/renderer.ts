@@ -58,7 +58,6 @@ const HEAD_OFF = 14.6;
 const OBJ_COLOR: Record<ObjectiveKind, string> = {
   weapon: '#e0a83c',
   recruit: '#43d9a3',
-  multiplier: '#b98bff',
 };
 const OBJ_BROKEN_COLOR = '#3a3a44';
 
@@ -342,14 +341,14 @@ export class Renderer {
       }
 
       // HP / charge bar, just above the billboard.
-      const frac = o.kind === 'multiplier' ? Math.min(1, 1 - o.hp / o.maxHp) : o.hp / o.maxHp;
+      const frac = o.hp / o.maxHp;
       if (!brokenFlat) {
         const barW = rightX - leftX;
         const barH = Math.max(2, 5 * scale);
         const barY = topY - barH - Math.max(1, 3 * scale);
         ctx.fillStyle = 'rgba(0,0,0,0.55)';
         ctx.fillRect(leftX, barY, barW, barH);
-        ctx.fillStyle = o.kind === 'multiplier' ? '#b98bff' : '#e8535f';
+        ctx.fillStyle = '#e8535f';
         ctx.fillRect(leftX, barY, barW * Math.max(0, Math.min(1, frac)), barH);
       }
 

@@ -157,12 +157,21 @@ describe('red pursuit', () => {
   it('brings reds onto the squad instead of past it', () => {
     // Regression: reds used to descend at a constant rate regardless of where
     // the squad was, so most of them sailed by and were never a threat.
-    const w = run(21, 60 * 40, (world) => {
-      world.targetX = LANE_W * 0.25;
-    });
-    const resolved = w.kills + w.leaked;
-    expect(resolved).toBeGreaterThan(50);
-    expect(w.leaked / resolved).toBeLessThan(0.1);
+    // The squad parks off-centre on purpose — that is the case the old model
+    // got wrong — and results are pooled across seeds so the ratio rests on a
+    // decent sample even though a parked squad does not survive long.
+    let kills = 0;
+    let leaked = 0;
+    for (let seed = 0; seed < 6; seed++) {
+      const w = run(21 + seed * 977, 60 * 40, (world) => {
+        world.targetX = LANE_W * 0.25;
+      });
+      kills += w.kills;
+      leaked += w.leaked;
+    }
+    const resolved = kills + leaked;
+    expect(resolved).toBeGreaterThan(200);
+    expect(leaked / resolved).toBeLessThan(0.1);
   });
 
   it('closes on a squad parked far from the spawn column', () => {
@@ -194,21 +203,6 @@ describe('objectives', () => {
     expect(target.broken).toBe(true);
     expect(target.resolved).toBe(true);
     expect(w.count).toBeGreaterThan(before - 100 + target.value / 2);
-  });
-
-  it('charges a multiplier board rather than breaking it', () => {
-    const w = new World(11, VIEW_H);
-    w.count = 260;
-    const board = w.objectives.find((o) => o.kind === 'multiplier');
-    expect(board).toBeDefined();
-    if (!board) return;
-    while (w.anchorY < board.y && w.state === 'running') {
-      w.targetX = board.x;
-      w.step(1 / 60);
-    }
-    expect(board.broken).toBe(false);
-    expect(board.hp).toBeLessThan(board.maxHp);
-    expect(board.resolved).toBe(true);
   });
 
   it('leaves objectives intact when the squad never lines up on them', () => {
