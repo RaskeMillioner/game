@@ -132,7 +132,10 @@ export class World {
   }
 
   private stepAnchor(dt: number): void {
-    const margin = Math.min(this.radius * 0.55, LANE_W * 0.32);
+    // Keep almost the whole crowd inside the lane. At 0.55 the formation's outer
+    // ranks hung off the edge of the screen, which in perspective reads as units
+    // vanishing into nothing.
+    const margin = Math.min(this.radius * 0.9, LANE_W * 0.36);
     if (this.targetX < margin) this.targetX = margin;
     else if (this.targetX > LANE_W - margin) this.targetX = LANE_W - margin;
     const k = 1 - Math.exp(-dt * ANCHOR_FOLLOW);

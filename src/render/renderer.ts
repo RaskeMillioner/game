@@ -1,30 +1,62 @@
 import {
   BULLET_RADIUS, CORPSE_LIFE, LANE_W, MAX_BLUE_RENDER, MAX_CORPSE, WEAPONS,
 } from '../sim/config.js';
-import { gateIsGood, gateLabel, GATE_MID } from '../sim/gates.js';
+import { type Gate, gateIsGood, gateLabel, GATE_MID } from '../sim/gates.js';
+import {
+  multiplierOf, type Objective, OBJECTIVE_H, OBJECTIVE_W, type ObjectiveKind,
+} from '../sim/objectives.js';
 import type { World } from '../sim/world.js';
+import { CAM_HEIGHT, FAR_DZ, FOCAL, NEAR, Projector } from './projection.js';
 
 const TAU = Math.PI * 2;
+
+interface StructureItem {
+  dz: number;
+  gate: Gate | null;
+  objective: Objective | null;
+}
 
 const COL_BG = '#0d0d12';
 const COL_LANE = '#15151d';
 const COL_STRIPE = '#1b1b26';
-const COL_EDGE = '#23233010';
+const COL_EDGE = '#2c2c3a';
 const COL_BLUE = '#4da3ff';
 const COL_RED = '#ff3b47';
 const COL_BULLET = '#ffe066';
 const COL_CORPSE = '#2a1a22';
+const COL_SKY_TOP = '#0a0a10';
+const COL_SKY_HORIZON = '#20212f';
 
 const STRIPE = 200;
-const GATE_H = 90;
+const STRIPE_THICK = 42;
+const GATE_HEIGHT = 220;
+
+// Unprojected stickman dimensions (world units); scaled per-unit by projected `scale`.
+const BODY_HW = 3.2;
+const BODY_H = 11;
+const HEAD_R = 3.9;
+const HEAD_OFF = 14.6;
+
+const OBJ_COLOR: Record<ObjectiveKind, string> = {
+  weapon: '#e0a83c',
+  recruit: '#43d9a3',
+  multiplier: '#b98bff',
+};
+const OBJ_BROKEN_COLOR = '#3a3a44';
 
 /**
  * Draws the whole world with a fixed, tiny number of fill calls: one path per
  * team, one for bullets, one for corpses. Per-unit draw calls would put a
  * thousand state changes in the hot path and never hold 60fps on Safari.
+ *
+ * The view is a fake-3D ground-plane projection (see projection.ts): the
+ * camera sits behind and above the squad, looking forward up the lane.
+ * Everything below the horizon is projected per-frame; the HUD stays in flat
+ * screen space on top.
  */
 export class Renderer {
   private readonly ctx: CanvasRenderingContext2D;
+  private readonly projector = new Projector();
   scale = 1;
   cssW = 0;
   cssH = 0;
@@ -55,42 +87,320 @@ export class Renderer {
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     ctx.setTransform(this.scale, 0, 0, this.scale, 0, 0);
 
-    const sy = (worldY: number): number => viewH - (worldY - w.cameraY);
+    const proj = this.projector;
+    proj.update(w.cameraY, w.anchorX, viewH);
 
-    this.drawLane(w, viewH, sy);
-    this.drawCorpses(w, sy);
-    this.drawGates(w, viewH, sy);
-    this.drawCrowds(w, sy);
-    this.drawBullets(w, sy);
+    this.drawSky();
+    this.drawGround(viewH);
+    this.drawStripes();
+    this.drawStructures(w);
+    this.drawCorpses(w);
+    this.drawCrowds(w);
+    this.drawBullets(w);
     this.drawHud(w, fps);
     if (w.state === 'dead') this.drawGameOver(w);
   }
 
-  private drawLane(w: World, viewH: number, sy: (y: number) => number): void {
+  /** Backdrop above the horizon: a quiet gradient plus a faint glow at the vanishing line. */
+  private drawSky(): void {
     const ctx = this.ctx;
-    ctx.fillStyle = COL_LANE;
-    ctx.fillRect(0, 0, LANE_W, viewH);
+    const horizonY = this.projector.horizonY;
+    const g = ctx.createLinearGradient(0, 0, 0, horizonY);
+    g.addColorStop(0, COL_SKY_TOP);
+    g.addColorStop(1, COL_SKY_HORIZON);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, LANE_W, horizonY);
 
-    // Scrolling stripes: without them the forward motion is invisible.
-    ctx.fillStyle = COL_STRIPE;
-    const first = Math.floor(w.cameraY / STRIPE) * STRIPE;
-    for (let y = first; y < w.cameraY + viewH + STRIPE; y += STRIPE) {
-      ctx.fillRect(0, sy(y) - 26, LANE_W, 26);
-    }
-    ctx.fillStyle = COL_EDGE;
-    ctx.fillRect(0, 0, 6, viewH);
-    ctx.fillRect(LANE_W - 6, 0, 6, viewH);
+    const glowH = Math.min(90, horizonY);
+    const glow = ctx.createLinearGradient(0, horizonY - glowH, 0, horizonY);
+    glow.addColorStop(0, 'rgba(130,155,215,0)');
+    glow.addColorStop(1, 'rgba(130,155,215,0.30)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, horizonY - glowH, LANE_W, glowH);
   }
 
-  private drawCorpses(w: World, sy: (y: number) => number): void {
+  /** Ground trapezoid: lane edges converge to the single vanishing point at the horizon. */
+  private drawGround(viewH: number): void {
     const ctx = this.ctx;
+    const proj = this.projector;
+    const horizonY = proj.horizonY;
+
+    // Fill everything below the horizon first so the corners outside the
+    // (narrower, converging) lane trapezoid aren't left as gaps.
+    ctx.fillStyle = COL_BG;
+    ctx.fillRect(0, horizonY, LANE_W, Math.max(0, viewH - horizonY));
+
+    const scaleBottom = Math.max((viewH - horizonY) / CAM_HEIGHT, FOCAL / FAR_DZ);
+    const dzBottom = Math.max(NEAR, FOCAL / scaleBottom);
+    const worldYBottom = proj.camY + dzBottom;
+    const left = proj.project(0, worldYBottom);
+    const leftX = left.x;
+    const leftY = left.y;
+    const right = proj.project(LANE_W, worldYBottom);
+
+    ctx.fillStyle = COL_LANE;
+    ctx.beginPath();
+    ctx.moveTo(leftX, leftY);
+    ctx.lineTo(right.x, right.y);
+    ctx.lineTo(LANE_W / 2, horizonY);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = COL_EDGE;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(leftX, leftY);
+    ctx.lineTo(LANE_W / 2, horizonY);
+    ctx.moveTo(right.x, right.y);
+    ctx.lineTo(LANE_W / 2, horizonY);
+    ctx.stroke();
+  }
+
+  /**
+   * Scrolling ground stripes, projected from the same worldY grid every
+   * frame. Horizontal bands that compress toward the horizon — this is the
+   * primary "we are moving forward" cue now that the camera itself is fixed
+   * relative to the squad.
+   */
+  private drawStripes(): void {
+    const ctx = this.ctx;
+    const proj = this.projector;
+    const path = new Path2D();
+    const first = Math.floor(proj.camY / STRIPE) * STRIPE;
+    let any = false;
+    for (let y = first; ; y += STRIPE) {
+      const dzNear = proj.dz(y);
+      if (dzNear > FAR_DZ) break;
+      const dzFar = proj.dz(y + STRIPE_THICK);
+      if (dzFar < NEAR && dzNear < NEAR) continue;
+
+      const nearL = proj.project(0, y);
+      const nearLX = nearL.x;
+      const nearLY = nearL.y;
+      const nearR = proj.project(LANE_W, y);
+      const nearRX = nearR.x;
+      const nearRY = nearR.y;
+      const farL = proj.project(0, y + STRIPE_THICK);
+      const farLX = farL.x;
+      const farLY = farL.y;
+      const farR = proj.project(LANE_W, y + STRIPE_THICK);
+
+      path.moveTo(nearLX, nearLY);
+      path.lineTo(nearRX, nearRY);
+      path.lineTo(farR.x, farR.y);
+      path.lineTo(farLX, farLY);
+      path.closePath();
+      any = true;
+    }
+    if (!any) return;
+    ctx.fillStyle = COL_STRIPE;
+    ctx.fill(path);
+  }
+
+  /** Gates as upright billboards standing on the ground, split into left/right halves. */
+  /**
+   * Gates and objectives share the lane, so they have to be painted as one
+   * depth-sorted pass. Drawing them in two separate passes lets a distant
+   * billboard paint over a nearer gate's label, which reads as a rendering
+   * glitch and, worse, hides the choice the player is about to make.
+   */
+  private readonly structureOrder: StructureItem[] = [];
+
+  private drawStructures(w: World): void {
+    const proj = this.projector;
+    const order = this.structureOrder;
+    order.length = 0;
+    for (const gate of w.gates) {
+      if (gate.taken) continue;
+      order.push({ dz: proj.dz(gate.y), gate, objective: null });
+    }
+    for (const o of w.objectives) {
+      const dz = proj.dz(o.y);
+      if (o.resolved && dz < NEAR) continue;
+      order.push({ dz, gate: null, objective: o });
+    }
+    order.sort((a, b) => b.dz - a.dz);
+    for (const item of order) {
+      if (item.gate) this.drawGate(item.gate);
+      else if (item.objective) this.drawObjective(item.objective);
+    }
+  }
+
+  private drawGate(gate: Gate): void {
+    const ctx = this.ctx;
+    const proj = this.projector;
+    {
+      const dz = proj.dz(gate.y);
+      if (dz < -50 || dz > FAR_DZ) return;
+
+      const halves = [
+        { op: gate.left, x0: 0, x1: GATE_MID },
+        { op: gate.right, x0: GATE_MID, x1: LANE_W },
+      ];
+      for (const half of halves) {
+        const baseL = proj.project(half.x0, gate.y);
+        const baseLX = baseL.x;
+        const baseLY = baseL.y;
+        const scale = baseL.scale;
+        const baseR = proj.project(half.x1, gate.y);
+        if (Math.max(baseLX, baseR.x) < 0 || Math.min(baseLX, baseR.x) > LANE_W) continue;
+        const topY = proj.raise(baseLY, GATE_HEIGHT, scale);
+        const topRY = proj.raise(baseR.y, GATE_HEIGHT, scale);
+
+        const good = gateIsGood(half.op);
+        ctx.fillStyle = good ? 'rgba(60,200,120,0.20)' : 'rgba(220,60,70,0.20)';
+        ctx.beginPath();
+        ctx.moveTo(baseLX, baseLY);
+        ctx.lineTo(baseR.x, baseR.y);
+        ctx.lineTo(baseR.x, topRY);
+        ctx.lineTo(baseLX, topY);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = good ? '#3ecb7a' : '#e8535f';
+        const barH = Math.max(1, 6 * scale);
+        ctx.fillRect(Math.min(baseLX, baseR.x), Math.min(baseLY, baseR.y) - barH, Math.abs(baseR.x - baseLX), barH);
+
+        const cx = (baseLX + baseR.x) / 2;
+        const cy = (Math.min(baseLY, baseR.y) + Math.min(topY, topRY)) / 2;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#f2f4fa';
+        fitText(
+          ctx,
+          gateLabel(half.op),
+          cx,
+          cy,
+          Math.abs(baseR.x - baseLX) * 0.86,
+          Math.abs(Math.min(baseLY, baseR.y) - Math.min(topY, topRY)) * 0.62,
+          44 * scale,
+        );
+      }
+    }
+  }
+
+  /**
+   * Objectives as upright billboards to one side of the lane: a distinct
+   * silhouette per kind, an HP/charge bar, and a clear broken state.
+   */
+  private drawObjective(o: Objective): void {
+    const ctx = this.ctx;
+    const proj = this.projector;
+    {
+      const dz = proj.dz(o.y);
+      if (dz < -50 || dz > FAR_DZ) return;
+
+      const base = proj.project(o.x, o.y);
+      const scale = base.scale;
+      const halfW = (OBJECTIVE_W / 2) * scale;
+      if (base.x + halfW < 0 || base.x - halfW > LANE_W) return;
+
+      const flash = o.flash;
+      const brokenFlat = o.broken; // weapon/recruit only; multiplier never breaks
+      const height = (brokenFlat ? OBJECTIVE_H * 0.22 : OBJECTIVE_H) * scale * (1 + flash * 0.12);
+      const baseX = base.x;
+      const baseY = base.y;
+      const topY = baseY - height;
+      const leftX = baseX - halfW;
+      const rightX = baseX + halfW;
+
+      ctx.fillStyle = brokenFlat ? OBJ_BROKEN_COLOR : OBJ_COLOR[o.kind as ObjectiveKind];
+      this.drawObjectiveSilhouette(o.kind, leftX, rightX, baseY, topY, scale, brokenFlat);
+
+      if (flash > 0.01) {
+        ctx.fillStyle = `rgba(255,255,255,${Math.min(0.85, flash * 0.85)})`;
+        ctx.fillRect(leftX, topY, rightX - leftX, baseY - topY);
+      }
+
+      // HP / charge bar, just above the billboard.
+      const frac = o.kind === 'multiplier' ? Math.min(1, 1 - o.hp / o.maxHp) : o.hp / o.maxHp;
+      if (!brokenFlat) {
+        const barW = rightX - leftX;
+        const barH = Math.max(2, 5 * scale);
+        const barY = topY - barH - Math.max(1, 3 * scale);
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(leftX, barY, barW, barH);
+        ctx.fillStyle = o.kind === 'multiplier' ? '#b98bff' : '#e8535f';
+        ctx.fillRect(leftX, barY, barW * Math.max(0, Math.min(1, frac)), barH);
+      }
+
+      if (o.kind === 'multiplier' && !brokenFlat) {
+        const mult = multiplierOf(o);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#faf6ff';
+        fitText(
+          ctx,
+          `×${mult.toFixed(1)}`,
+          baseX,
+          (baseY + topY) / 2,
+          (rightX - leftX) * 0.86,
+          Math.abs(baseY - topY) * 0.5,
+          30 * scale,
+        );
+      }
+    }
+  }
+
+  private drawObjectiveSilhouette(
+    kind: ObjectiveKind,
+    leftX: number,
+    rightX: number,
+    baseY: number,
+    topY: number,
+    scale: number,
+    broken: boolean,
+  ): void {
+    const ctx = this.ctx;
+    const w = rightX - leftX;
+    const h = baseY - topY;
+    if (broken || kind === 'weapon') {
+      // Crate: a plain box; broken kinds collapse to flat rubble using the same shape.
+      ctx.fillRect(leftX, topY, w, h);
+      if (!broken) {
+        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+        ctx.lineWidth = Math.max(1, 2 * scale);
+        ctx.beginPath();
+        ctx.moveTo(leftX, topY + h / 2);
+        ctx.lineTo(rightX, topY + h / 2);
+        ctx.moveTo((leftX + rightX) / 2, topY);
+        ctx.lineTo((leftX + rightX) / 2, baseY);
+        ctx.stroke();
+      }
+      return;
+    }
+    if (kind === 'recruit') {
+      // Pod: a capsule — rect body with a rounded cap on top.
+      const capR = w / 2;
+      const bodyTop = topY + capR;
+      ctx.fillRect(leftX, bodyTop, w, h - capR);
+      ctx.beginPath();
+      ctx.arc((leftX + rightX) / 2, bodyTop, capR, Math.PI, 0);
+      ctx.closePath();
+      ctx.fill();
+      return;
+    }
+    // Multiplier: a flat sign board on a thin post.
+    const postW = Math.max(1, w * 0.12);
+    const boardH = h * 0.62;
+    ctx.fillRect((leftX + rightX) / 2 - postW / 2, topY + boardH, postW, h - boardH);
+    ctx.fillRect(leftX, topY, w, boardH);
+  }
+
+  private drawCorpses(w: World): void {
+    const ctx = this.ctx;
+    const proj = this.projector;
     const path = new Path2D();
     let any = false;
     for (let i = 0; i < MAX_CORPSE; i++) {
       if (w.corpseAge[i] >= CORPSE_LIFE) continue;
-      const y = sy(w.corpseY[i]);
-      if (y < -20 || y > w.viewH + 20) continue;
-      path.rect(w.corpseX[i] - 7, y - 3, 14, 6);
+      const dz = proj.dz(w.corpseY[i]);
+      if (dz < NEAR || dz > FAR_DZ) continue;
+      const p = proj.project(w.corpseX[i], w.corpseY[i]);
+      const hw = 7 * p.scale;
+      const hh = 3 * p.scale;
+      if (p.x + hw < 0 || p.x - hw > LANE_W) continue;
+      path.rect(p.x - hw, p.y - hh, hw * 2, hh * 2);
       any = true;
     }
     if (!any) return;
@@ -98,41 +408,18 @@ export class Renderer {
     ctx.fill(path);
   }
 
-  private drawGates(w: World, viewH: number, sy: (y: number) => number): void {
+  /**
+   * Each team is one Path2D, one fill — the whole performance budget rests on
+   * this. Units within a team are the same colour, so overlap is invisible
+   * and there is no need (and no time budget) to depth-sort 1400 of them.
+   */
+  private drawCrowds(w: World): void {
     const ctx = this.ctx;
-    for (const gate of w.gates) {
-      if (gate.taken) continue;
-      const y = sy(gate.y);
-      if (y < -GATE_H || y > viewH + GATE_H) continue;
-
-      const halves = [
-        { op: gate.left, x: 0 },
-        { op: gate.right, x: GATE_MID },
-      ];
-      for (const half of halves) {
-        const good = gateIsGood(half.op);
-        ctx.fillStyle = good ? 'rgba(60,200,120,0.16)' : 'rgba(220,60,70,0.16)';
-        ctx.fillRect(half.x + 4, y - GATE_H, GATE_MID - 8, GATE_H);
-        ctx.fillStyle = good ? '#3ecb7a' : '#e8535f';
-        ctx.fillRect(half.x + 4, y - 5, GATE_MID - 8, 5);
-
-        ctx.font = 'bold 44px system-ui, -apple-system, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(gateLabel(half.op), half.x + GATE_MID / 2, y - GATE_H / 2);
-      }
-    }
-  }
-
-  private drawCrowds(w: World, sy: (y: number) => number): void {
-    const ctx = this.ctx;
-    const viewH = w.viewH;
+    const proj = this.projector;
 
     const reds = new Path2D();
     for (let i = 0; i < w.redCount; i++) {
-      const y = sy(w.redY[i]);
-      if (y < -30 || y > viewH + 30) continue;
-      stickman(reds, w.redX[i], y);
+      addStickman(reds, proj, w.redX[i], w.redY[i]);
     }
     ctx.fillStyle = COL_RED;
     ctx.fill(reds);
@@ -140,21 +427,29 @@ export class Renderer {
     const blues = new Path2D();
     const n = Math.min(w.rendered, MAX_BLUE_RENDER);
     for (let i = 0; i < n; i++) {
-      stickman(blues, w.blueX[i], sy(w.blueY[i]));
+      addStickman(blues, proj, w.blueX[i], w.blueY[i]);
     }
     ctx.fillStyle = COL_BLUE;
     ctx.fill(blues);
   }
 
-  private drawBullets(w: World, sy: (y: number) => number): void {
+  private drawBullets(w: World): void {
     const ctx = this.ctx;
     if (w.bulletCount === 0) return;
+    const proj = this.projector;
     const path = new Path2D();
+    let any = false;
     for (let i = 0; i < w.bulletCount; i++) {
-      const y = sy(w.bulY[i]);
-      if (y < -20 || y > w.viewH + 20) continue;
-      path.rect(w.bulX[i] - BULLET_RADIUS * 0.45, y - 9, BULLET_RADIUS * 0.9, 12);
+      const dz = proj.dz(w.bulY[i]);
+      if (dz < NEAR || dz > FAR_DZ) continue;
+      const p = proj.project(w.bulX[i], w.bulY[i]);
+      const hw = BULLET_RADIUS * 0.45 * p.scale;
+      const len = 12 * p.scale;
+      if (p.x + hw < 0 || p.x - hw > LANE_W) continue;
+      path.rect(p.x - hw, p.y - len * 0.75, hw * 2, len);
+      any = true;
     }
+    if (!any) return;
     ctx.fillStyle = COL_BULLET;
     ctx.fill(path);
   }
@@ -208,9 +503,47 @@ export class Renderer {
   }
 }
 
-/** Two subpaths per unit: body slab and head. Appended to a shared batch path. */
-function stickman(path: Path2D, x: number, y: number): void {
-  path.rect(x - 3.2, y - 11, 6.4, 11);
-  path.moveTo(x + 3.9, y - 14.6);
-  path.arc(x, y - 14.6, 3.9, 0, TAU);
+/**
+ * Two subpaths per unit: body slab and head, appended to a shared batch path.
+ * Dimensions scale with the projected distance so the crowd shrinks toward
+ * the horizon instead of staying a flat top-down size.
+ */
+function addStickman(path: Path2D, proj: Projector, worldX: number, worldY: number): void {
+  const dz = proj.dz(worldY);
+  if (dz < NEAR || dz > FAR_DZ) return;
+  const p = proj.project(worldX, worldY);
+  const scale = p.scale;
+  const headR = HEAD_R * scale;
+  const hw = BODY_HW * scale;
+  if (p.x + headR < 0 || p.x - headR > LANE_W) return;
+  const bodyH = BODY_H * scale;
+  const headOff = HEAD_OFF * scale;
+  path.rect(p.x - hw, p.y - bodyH, hw * 2, bodyH);
+  path.moveTo(p.x + headR, p.y - headOff);
+  path.arc(p.x, p.y - headOff, headR, 0, TAU);
+}
+
+/**
+ * Draws text sized to the billboard it sits on. A projected label grows without
+ * bound as the camera closes on it, so clamping to a fixed pixel ceiling still
+ * lets it overflow its own panel and run off the screen edge; the constraint
+ * that matters is the panel, not the viewport.
+ */
+function fitText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  cx: number,
+  cy: number,
+  maxW: number,
+  maxH: number,
+  desired: number,
+): void {
+  let px = Math.max(7, Math.min(desired, maxH));
+  ctx.font = `bold ${px}px system-ui, -apple-system, sans-serif`;
+  const measured = ctx.measureText(text).width;
+  if (measured > maxW && measured > 0) {
+    px = Math.max(6, px * (maxW / measured));
+    ctx.font = `bold ${px}px system-ui, -apple-system, sans-serif`;
+  }
+  ctx.fillText(text, cx, cy);
 }

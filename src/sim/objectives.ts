@@ -25,7 +25,12 @@ export interface Objective {
 
 export const OBJECTIVE_W = 132;
 export const OBJECTIVE_H = 96;
-export const OBJECTIVE_FIRST = 900;
+/**
+ * Offset so objectives land midway between gates rather than on top of them.
+ * Stacked in the same stretch of lane they compete for the same glance and the
+ * player cannot read either in time.
+ */
+export const OBJECTIVE_FIRST = 2050;
 export const OBJECTIVE_SPACING = 1900;
 
 /**
