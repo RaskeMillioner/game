@@ -14,6 +14,13 @@ function restart(): void {
   world = new World((Math.random() * 0xffffffff) >>> 0, viewH);
 }
 
+// Dev-only inspection hook. Reaching the distance where brutes and exploders
+// appear takes a minute of competent play, which makes verifying how they draw
+// impractical otherwise. Stripped from production builds by dead-code removal.
+if (import.meta.env.DEV) {
+  (window as unknown as { __world: () => World }).__world = () => world;
+}
+
 window.addEventListener('resize', () => {
   viewH = renderer.resize();
   world.resize(viewH);

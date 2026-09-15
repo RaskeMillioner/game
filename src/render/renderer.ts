@@ -1,6 +1,7 @@
 import {
   BULLET_RADIUS, CORPSE_LIFE, LANE_W, MAX_BLUE_RENDER, MAX_CORPSE, WEAPONS,
 } from '../sim/config.js';
+import { ENEMIES, ENEMY_KINDS } from '../sim/enemies.js';
 import { type Gate, GATE_PANEL_W, gateIsGood, gateLabel } from '../sim/gates.js';
 import {
   objectiveCaption, objectiveLabel, type Objective, OBJECTIVE_H, OBJECTIVE_W,
@@ -222,6 +223,7 @@ export class Renderer {
    * glitch and, worse, hides the choice the player is about to make.
    */
   private readonly structureOrder: StructureItem[] = [];
+  private readonly redPaths: (Path2D | null)[] = new Array(ENEMY_KINDS).fill(null);
 
   private drawStructures(w: World): void {
     const proj = this.projector;
@@ -454,12 +456,26 @@ export class Renderer {
     const ctx = this.ctx;
     const proj = this.projector;
 
-    const reds = new Path2D();
+    // One path per enemy type rather than per unit: four fills instead of one,
+    // still not four thousand. Overlap within a type is invisible because the
+    // type shares a colour, so there is still no depth sort.
+    const byType = this.redPaths;
+    for (let t = 0; t < ENEMY_KINDS; t++) byType[t] = new Path2D();
     for (let i = 0; i < w.redCount; i++) {
-      addStickman(reds, proj, w.redX[i], w.redY[i]);
+      const stats = ENEMIES[w.redType[i]];
+      addStickman(
+        byType[w.redType[i]] as Path2D,
+        proj,
+        w.redX[i],
+        w.redY[i],
+        stats.bodyScale,
+        stats.headScale,
+      );
     }
-    ctx.fillStyle = COL_RED;
-    ctx.fill(reds);
+    for (let t = 0; t < ENEMY_KINDS; t++) {
+      ctx.fillStyle = ENEMIES[t].color;
+      ctx.fill(byType[t] as Path2D);
+    }
 
     const blues = new Path2D();
     const n = Math.min(w.rendered, MAX_BLUE_RENDER);
@@ -545,16 +561,23 @@ export class Renderer {
  * Dimensions scale with the projected distance so the crowd shrinks toward
  * the horizon instead of staying a flat top-down size.
  */
-function addStickman(path: Path2D, proj: Projector, worldX: number, worldY: number): void {
+function addStickman(
+  path: Path2D,
+  proj: Projector,
+  worldX: number,
+  worldY: number,
+  bodyScale = 1,
+  headScale = 1,
+): void {
   const dz = proj.dz(worldY);
   if (dz < NEAR || dz > FAR_DZ) return;
   const p = proj.project(worldX, worldY);
   const scale = p.scale;
-  const headR = HEAD_R * scale;
-  const hw = BODY_HW * scale;
+  const headR = HEAD_R * scale * headScale;
+  const hw = BODY_HW * scale * bodyScale;
   if (p.x + headR < 0 || p.x - headR > LANE_W) return;
-  const bodyH = BODY_H * scale;
-  const headOff = HEAD_OFF * scale;
+  const bodyH = BODY_H * scale * bodyScale;
+  const headOff = (HEAD_OFF + (BODY_H * (bodyScale - 1))) * scale;
   path.rect(p.x - hw, p.y - bodyH, hw * 2, bodyH);
   path.moveTo(p.x + headR, p.y - headOff);
   path.arc(p.x, p.y - headOff, headR, 0, TAU);

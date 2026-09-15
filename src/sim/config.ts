@@ -20,8 +20,7 @@ export const ANCHOR_FOLLOW = 14;
 export const DRAG_GAIN = 1.15;
 
 export const MAX_RED = 1400;
-export const RED_SPEED_MIN = 110;
-export const RED_SPEED_MAX = 155;
+/** Baseline contact radius; per-type radii live in enemies.ts. */
 export const RED_RADIUS = 9;
 /**
  * Weight on the lateral component of red pursuit. Below 1 they close the

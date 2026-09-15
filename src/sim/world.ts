@@ -3,9 +3,12 @@ import { Rng } from '../core/rng.js';
 import {
   ANCHOR_FOLLOW, BLUE_FOLLOW, BREAKTHROUGH_PAD, BULLET_LIFE, BULLET_RADIUS, CONTACT_PAD, CORPSE_LIFE,
   LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
-  RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, RED_SPEED_MAX, RED_SPEED_MIN, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
+  RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
   START_BLUE, WEAPONS,
 } from './config.js';
+import {
+  ENEMIES, ENEMY_KINDS, enemyHp, mixAt, pickType,
+} from './enemies.js';
 import { formationRadius, frontOrder, slotLag, slotX, slotY } from './formation.js';
 import { applyGate, buildGates, Gate, gateHit } from './gates.js';
 import {
@@ -35,6 +38,14 @@ export class World {
 
   kills = 0;
   /**
+   * Per-type attribution for balance work. Only contacts and breakthroughs cost
+   * blues; a kill at range costs nothing, so the three are counted separately
+   * rather than lumped together.
+   */
+  readonly killsByType = new Int32Array(ENEMY_KINDS);
+  readonly contactsByType = new Int32Array(ENEMY_KINDS);
+  readonly leaksByType = new Int32Array(ENEMY_KINDS);
+  /**
    * Reds that broke through the crowd. Each one costs a blue, so this is a
    * pressure gauge rather than a bug counter: it is the price of leaving part
    * of the swarm unshot.
@@ -52,6 +63,8 @@ export class World {
   readonly redX = new Float32Array(MAX_RED);
   readonly redY = new Float32Array(MAX_RED);
   readonly redSpeed = new Float32Array(MAX_RED);
+  readonly redType = new Uint8Array(MAX_RED);
+  readonly redHp = new Float32Array(MAX_RED);
   /** Per-red lateral bias, so the swarm envelops the crowd instead of queueing into it. */
   readonly redOff = new Float32Array(MAX_RED);
 
@@ -61,7 +74,8 @@ export class World {
   readonly bulVX = new Float32Array(MAX_BULLET);
   readonly bulVY = new Float32Array(MAX_BULLET);
   readonly bulLife = new Float32Array(MAX_BULLET);
-  readonly bulPierce = new Float32Array(MAX_BULLET);
+  /** Damage pool. A bullet spends it across the reds it passes through. */
+  readonly bulDmg = new Float32Array(MAX_BULLET);
 
   corpseHead = 0;
   readonly corpseX = new Float32Array(MAX_CORPSE);
@@ -74,6 +88,7 @@ export class World {
   private readonly grid = new Grid(56, MAX_RED);
   private readonly hits = new Int32Array(256);
   private readonly redDead = new Uint8Array(MAX_RED);
+  private readonly mix = new Float32Array(ENEMY_KINDS);
   private fireTimer = 0;
   private squadSettled = false;
 
@@ -190,6 +205,12 @@ export class World {
     const spawnY = this.cameraY + this.viewH + 60;
     for (let i = 0; i < n && this.redCount < MAX_RED; i++) {
       const j = this.redCount++;
+      const km = this.distance / 1000;
+      mixAt(km, this.mix);
+      const type = pickType(this.mix, this.rng.next());
+      const stats = ENEMIES[type];
+      this.redType[j] = type;
+      this.redHp[j] = enemyHp(type, km);
       const frontage = Math.min(
         RED_SPAWN_SPREAD,
         Math.max(RED_SPAWN_MIN_SPREAD, this.radius * RED_SPAWN_RADIUS_GAIN + 70),
@@ -197,7 +218,7 @@ export class World {
       const bias = this.anchorX + this.rng.range(-frontage, frontage);
       this.redX[j] = bias < 25 ? 25 : bias > LANE_W - 25 ? LANE_W - 25 : bias;
       this.redY[j] = spawnY + this.rng.range(0, 220);
-      this.redSpeed[j] = this.rng.range(RED_SPEED_MIN, RED_SPEED_MAX);
+      this.redSpeed[j] = this.rng.range(stats.speedMin, stats.speedMax);
       this.redOff[j] = this.rng.range(-1, 1);
     }
   }
@@ -232,12 +253,15 @@ export class World {
       // A breakthrough is never free: it takes one blue down with it and dies
       // there, so every red you fail to shoot in front of you is a body lost.
       if (this.redY[i] < breachY || this.redY[i] < cullY) {
+        const type = this.redType[i];
+        const cost = ENEMIES[type].cost;
         this.addCorpse(this.redX[i], this.redY[i], true);
         this.addCorpse(this.redX[i], this.redY[i], false);
         this.leaked++;
+        this.leaksByType[type]++;
         this.removeRed(i);
         i--;
-        this.count--;
+        this.count -= cost;
         if (this.count <= 0) {
           this.count = 0;
           return;
@@ -252,6 +276,8 @@ export class World {
     this.redY[i] = this.redY[last];
     this.redSpeed[i] = this.redSpeed[last];
     this.redOff[i] = this.redOff[last];
+    this.redType[i] = this.redType[last];
+    this.redHp[i] = this.redHp[last];
   }
 
   private stepFiring(dt: number): void {
@@ -297,7 +323,7 @@ export class World {
         this.bulVX[j] = Math.sin(spread) * w.speed;
         this.bulVY[j] = Math.cos(spread) * w.speed;
         this.bulLife[j] = BULLET_LIFE;
-        this.bulPierce[j] = perBullet;
+        this.bulDmg[j] = perBullet;
       }
     }
   }
@@ -321,37 +347,47 @@ export class World {
     this.bulVX[i] = this.bulVX[last];
     this.bulVY[i] = this.bulVY[last];
     this.bulLife[i] = this.bulLife[last];
-    this.bulPierce[i] = this.bulPierce[last];
+    this.bulDmg[i] = this.bulDmg[last];
   }
 
   private collideBullets(): void {
     const hitR = RED_RADIUS + BULLET_RADIUS;
-    const hitR2 = hitR * hitR;
     const dead = this.redDead;
     let anyDead = false;
 
     for (let i = 0; i < this.bulletCount; i++) {
       const bx = this.bulX[i];
       const by = this.bulY[i];
-      let pierce = this.bulPierce[i];
+      let dmg = this.bulDmg[i];
       const n = this.grid.query(bx, by, hitR, this.hits);
-      for (let h = 0; h < n && pierce >= 1; h++) {
+      for (let h = 0; h < n && dmg > 0; h++) {
         const r = this.hits[h];
         if (dead[r] === 1) continue;
+        const rr = hitR + ENEMIES[this.redType[r]].radius - RED_RADIUS;
         const dx = this.redX[r] - bx;
         const dy = this.redY[r] - by;
-        if (dx * dx + dy * dy > hitR2) continue;
-        // Flag rather than swap-remove: the grid holds indices into these arrays,
-        // so compaction has to wait until every bullet has been resolved.
+        if (dx * dx + dy * dy > rr * rr) continue;
+
+        const hp = this.redHp[r];
+        if (hp > dmg) {
+          // A tough enemy absorbs the rest of the bullet. That is the point of
+          // a brute: it eats fire that would otherwise be shredding the tide.
+          this.redHp[r] = hp - dmg;
+          dmg = 0;
+          break;
+        }
+        dmg -= hp;
+        // Flag rather than swap-remove: the grid holds indices into these
+        // arrays, so compaction has to wait until every bullet is resolved.
         dead[r] = 1;
         anyDead = true;
         this.addCorpse(this.redX[r], this.redY[r], true);
         this.kills++;
-        pierce -= 1;
+        this.killsByType[this.redType[r]]++;
       }
-      if (pierce !== this.bulPierce[i]) {
-        this.bulPierce[i] = pierce;
-        if (pierce < 1) {
+      if (dmg !== this.bulDmg[i]) {
+        this.bulDmg[i] = dmg;
+        if (dmg <= 0) {
           this.removeBullet(i);
           i--;
         }
@@ -370,6 +406,8 @@ export class World {
         this.redY[w] = this.redY[r];
         this.redSpeed[w] = this.redSpeed[r];
         this.redOff[w] = this.redOff[r];
+        this.redType[w] = this.redType[r];
+        this.redHp[w] = this.redHp[r];
       }
       w++;
     }
@@ -386,7 +424,7 @@ export class World {
       for (let i = 0; i < this.bulletCount; i++) {
         if (Math.abs(this.bulX[i] - o.x) > halfW) continue;
         if (Math.abs(this.bulY[i] - o.y) > OBJECTIVE_H / 2) continue;
-        damageObjective(o, this.bulPierce[i]);
+        damageObjective(o, this.bulDmg[i]);
         this.removeBullet(i);
         i--;
         if (o.broken) break;
@@ -412,19 +450,21 @@ export class World {
 
   /** 1:1 attrition. A red that reaches the crowd takes exactly one blue with it. */
   private collideSquad(): void {
-    const reach = this.radius + RED_RADIUS + CONTACT_PAD;
-    const reach2 = reach * reach;
     const ax = this.anchorX;
     const ay = this.anchorY;
     for (let i = 0; i < this.redCount; i++) {
+      const type = this.redType[i];
+      const reach = this.radius + ENEMIES[type].radius + CONTACT_PAD;
       const dx = this.redX[i] - ax;
       const dy = this.redY[i] - ay;
-      if (dx * dx + dy * dy > reach2) continue;
+      if (dx * dx + dy * dy > reach * reach) continue;
       this.addCorpse(this.redX[i], this.redY[i], true);
       this.addCorpse(this.redX[i], this.redY[i], false);
+      this.kills++;
+      this.contactsByType[type]++;
       this.removeRed(i);
       i--;
-      this.count--;
+      this.count -= ENEMIES[type].cost;
       if (this.count <= 0) {
         this.count = 0;
         return;

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_RED, START_BLUE } from './config.js';
+import {
+  BRUTE, ENEMIES, ENEMY_KINDS, enemyHp, GRUNT, pickType, RUNNER,
+} from './enemies.js';
 import { gateIsGood, GATE_PANEL_W } from './gates.js';
 import { World } from './world.js';
 
@@ -217,5 +220,88 @@ describe('objectives', () => {
       w.step(1 / 60);
     }
     expect(board.broken).toBe(false);
+  });
+});
+
+describe('enemy types', () => {
+  it('scales brute hp with distance and leaves grunts flat', () => {
+    expect(enemyHp(GRUNT, 0)).toBe(enemyHp(GRUNT, 8));
+    expect(enemyHp(BRUTE, 4)).toBeGreaterThan(enemyHp(BRUTE, 0));
+  });
+
+  it('picks types in proportion to their weights', () => {
+    const weights = new Float32Array(ENEMY_KINDS);
+    weights[GRUNT] = 3;
+    weights[RUNNER] = 1;
+    expect(pickType(weights, 0.0)).toBe(GRUNT);
+    expect(pickType(weights, 0.74)).toBe(GRUNT);
+    expect(pickType(weights, 0.9)).toBe(RUNNER);
+  });
+
+  it('introduces every archetype over the course of a run', () => {
+    const seen = new Set<number>();
+    for (let s = 0; s < 8 && seen.size < ENEMY_KINDS; s++) {
+      const w = new World(s * 31 + 5, VIEW_H);
+      for (let i = 0; i < 60 * 90 && w.state === 'running'; i++) {
+        seekObjectives(900)(w);
+        w.step(1 / 60);
+        for (let r = 0; r < w.redCount; r++) seen.add(w.redType[r]);
+      }
+    }
+    expect(seen.size).toBe(ENEMY_KINDS);
+  });
+
+  it('charges more than one blue per special that gets through', () => {
+    // Attribution has to hold as an identity: every body lost is a contact or a
+    // breakthrough, priced by the type that caused it.
+    const w = run(17, 60 * 90, seekObjectives(900));
+    let events = 0;
+    let priced = 0;
+    for (let t = 0; t < ENEMY_KINDS; t++) {
+      events += w.contactsByType[t] + w.leaksByType[t];
+      priced += (w.contactsByType[t] + w.leaksByType[t]) * ENEMIES[t].cost;
+    }
+    expect(events).toBeGreaterThan(50);
+    expect(priced).toBeGreaterThan(events);
+  });
+
+  it('counts a ranged kill separately from one that reaches the crowd', () => {
+    const w = run(23, 60 * 60, seekObjectives(900));
+    let shot = 0;
+    let reached = 0;
+    for (let t = 0; t < ENEMY_KINDS; t++) {
+      shot += w.killsByType[t];
+      reached += w.contactsByType[t];
+    }
+    // A kill at range costs nothing; only the second number prices bodies.
+    expect(shot).toBeGreaterThan(reached);
+    expect(w.kills).toBe(shot + reached);
+  });
+
+  it('spends a bullet as a damage pool rather than one kill per pierce', () => {
+    const w = new World(9, VIEW_H);
+    w.count = 400;
+    // Step once so anchorY is real: placing the brute relative to an unstepped
+    // world drops it inside the crowd's own radius, where it contacts instantly.
+    w.step(1 / 60);
+    // The squad advances at SCROLL_SPEED, so the standoff has to outlast the
+    // window: far enough that the crowd cannot close on a stationary target
+    // before the bullets arrive.
+    const standoff = w.radius + 700;
+    w.redCount = 1;
+    w.redX[0] = w.anchorX;
+    w.redY[0] = w.anchorY + standoff;
+    w.redType[0] = BRUTE;
+    w.redHp[0] = 1e6;
+    w.redSpeed[0] = 0;
+    w.redOff[0] = 0;
+    for (let i = 0; i < 70; i++) w.step(1 / 60);
+    // Found by scan, not by index: swap-removal of other reds reshuffles slots.
+    let brute = -1;
+    for (let i = 0; i < w.redCount; i++) if (w.redType[i] === BRUTE) brute = i;
+    expect(brute).toBeGreaterThanOrEqual(0);
+    // It survived, but the fire landed: under a one-kill-per-pierce model a
+    // single bullet would have deleted it regardless of hp.
+    expect(w.redHp[brute]).toBeLessThan(1e6);
   });
 });

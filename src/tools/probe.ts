@@ -7,6 +7,7 @@
  *     --outfile=.probe.mjs && node .probe.mjs
  */
 import { LANE_W } from '../sim/config.js';
+import { ENEMIES, ENEMY_KINDS } from '../sim/enemies.js';
 import { gateIsGood, GATE_PANEL_W } from '../sim/gates.js';
 import { World } from '../sim/world.js';
 
@@ -63,6 +64,7 @@ const strategies: Record<string, Strategy> = {
 interface Result {
   seconds: number; kills: number; peak: number; died: boolean;
   broken: number; passed: number; leak: number;
+  leaksByType: number[]; killsByType: number[]; contactsByType: number[];
 }
 
 function runOne(strategy: Strategy, seed: number): Result {
@@ -83,6 +85,9 @@ function runOne(strategy: Strategy, seed: number): Result {
     broken: seen.filter((o) => o.broken).length,
     passed: seen.length,
     leak: w.kills + w.leaked > 0 ? w.leaked / (w.kills + w.leaked) : 0,
+    leaksByType: Array.from(w.leaksByType),
+    killsByType: Array.from(w.killsByType),
+    contactsByType: Array.from(w.contactsByType),
   };
 }
 
@@ -120,3 +125,31 @@ for (let s = 0; s < EARLY_RUNS; s++) {
   if (w.state === 'dead') earlyDeaths++;
 }
 console.log(`\nblind player dead within 15s: ${((earlyDeaths / EARLY_RUNS) * 100).toFixed(1)}% of ${EARLY_RUNS} runs`);
+
+// Per-type attribution: which archetype is actually ending runs, and how much
+// of the squad each one costs. Blues lost is the number that matters — an
+// exploder leaks rarely and still empties a quarter of the crowd when it does.
+console.log('\ntype       shot   reached   broke through   blues lost   share');
+{
+  const totals = new Array(ENEMY_KINDS).fill(0).map(() => ({ shot: 0, reached: 0, leaked: 0 }));
+  const RUNS_T = 60;
+  for (let s = 0; s < RUNS_T; s++) {
+    const r = runOne(strategies['obj-light'] as Strategy, s * 7919 + 13);
+    for (let t = 0; t < ENEMY_KINDS; t++) {
+      totals[t].shot += r.killsByType[t] ?? 0;
+      totals[t].reached += r.contactsByType[t] ?? 0;
+      totals[t].leaked += r.leaksByType[t] ?? 0;
+    }
+  }
+  const lost = totals.map((t, i) => (t.leaked + t.reached) * ENEMIES[i].cost);
+  const lostAll = lost.reduce((a, b) => a + b, 0) || 1;
+  for (let t = 0; t < ENEMY_KINDS; t++) {
+    console.log(
+      `${ENEMIES[t].name.padEnd(10)} ${(totals[t].shot / RUNS_T).toFixed(0).padStart(4)} ` +
+      `${(totals[t].reached / RUNS_T).toFixed(1).padStart(9)} ` +
+      `${(totals[t].leaked / RUNS_T).toFixed(1).padStart(15)} ` +
+      `${(lost[t] / RUNS_T).toFixed(0).padStart(13)} ` +
+      `${((lost[t] / lostAll) * 100).toFixed(0).padStart(7)}%`,
+    );
+  }
+}
