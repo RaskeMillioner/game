@@ -96,17 +96,17 @@ export const WEAPONS: readonly Weapon[] = [
 ];
 
 /**
- * Every weapon covers exactly the crowd's own width — the fire cone is derived
- * from the formation radius at this reference distance, not from a per-weapon
- * spread.
+ * How far each emitter scatters its shots sideways, as a multiple of half the
+ * gap to its neighbour. Shots still fly dead straight; this only decides where
+ * they start, so the columns tile the formation's width without holes and
+ * without trading away accuracy.
  *
- * Per-weapon spread made coverage the dominant term and buried the tier order:
- * the shotgun's wide fan swept the whole lane while the minigun's tight stream
- * reached about half of it, so the minigun landed more raw damage yet killed
- * less, dumping it into a narrow strip and overkilling there while the flanks
- * walked past untouched. With coverage equal, rate and power decide.
+ * Coverage, not damage, was what buried the tier order: the shotgun's fan swept
+ * the whole lane while the minigun's stream reached about half of it, so the
+ * minigun landed more raw damage yet killed less. With every weapon sampling
+ * the same width, rate and power decide.
  */
-export const FIRE_CONE_REF = 640;
+export const FIRE_COLUMN_FILL = 1.1;
 
 export const GATE_SPACING = 3400;
 export const GATE_FIRST = 1250;

@@ -2,14 +2,14 @@ import { Grid } from '../core/grid.js';
 import { Rng } from '../core/rng.js';
 import {
   ANCHOR_FOLLOW, BLUE_FOLLOW, BREAKTHROUGH_PAD, BULLET_RADIUS, BULLET_RANGE, CONTACT_PAD, CORPSE_LIFE,
-  FIRE_CONE_REF, LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
+  FIRE_COLUMN_FILL, LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
   RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
   START_BLUE, WEAPONS,
 } from './config.js';
 import {
   ENEMIES, ENEMY_KINDS, enemyHp, mixAt, pickType,
 } from './enemies.js';
-import { formationRadius, frontOrder, slotLag, slotX, slotY } from './formation.js';
+import { formationRadius, slotLag, slotX, slotY } from './formation.js';
 import { applyGate, buildGates, Gate, gateHit } from './gates.js';
 import {
   buildObjectives, collectObjective, damageObjective, Objective, OBJECTIVE_H, OBJECTIVE_W,
@@ -90,6 +90,9 @@ export class World {
   private readonly hits = new Int32Array(256);
   private readonly redDead = new Uint8Array(MAX_RED);
   private readonly mix = new Float32Array(ENEMY_KINDS);
+  /** Frontmost slot in each lateral column of the formation — the firing line. */
+  private readonly lineSlot = new Int32Array(MAX_EMITTERS);
+  private readonly lineFront = new Float32Array(MAX_EMITTERS);
   private fireTimer = 0;
   private squadSettled = false;
 
@@ -294,39 +297,75 @@ export class World {
     if (shots === 4) this.fireTimer = 0;
   }
 
+  /**
+   * Picks the firing line: the frontmost unit in each lateral column across the
+   * formation. Returns how many columns are manned.
+   *
+   * Taking the front-most units by forward position instead — which is what this
+   * used to do — clusters every emitter near the middle of the disc, because the
+   * front of a circle is its narrowest part. The line was then a fraction of the
+   * crowd's width no matter which weapon was firing, and only the shotgun's
+   * angular fan papered over it.
+   */
+  private buildFiringLine(n: number): number {
+    const cols = Math.min(n, MAX_EMITTERS);
+    const r = this.radius;
+    const span = r * 2 || 1;
+    for (let c = 0; c < cols; c++) {
+      this.lineSlot[c] = -1;
+      this.lineFront[c] = -Infinity;
+    }
+    for (let i = 0; i < n; i++) {
+      let c = (((slotX[i] + r) / span) * cols) | 0;
+      if (c < 0) c = 0;
+      else if (c >= cols) c = cols - 1;
+      if (slotY[i] > this.lineFront[c]) {
+        this.lineFront[c] = slotY[i];
+        this.lineSlot[c] = i;
+      }
+    }
+    let manned = 0;
+    for (let c = 0; c < cols; c++) {
+      if (this.lineSlot[c] >= 0) this.lineSlot[manned++] = this.lineSlot[c];
+    }
+    return manned;
+  }
+
   private fireVolley(): void {
     const w = WEAPONS[this.weaponTier];
     const n = this.rendered;
     if (n === 0) return;
-    const emitters = Math.min(n, MAX_EMITTERS);
-    // Fire spans the unit circle and no more, whatever the weapon.
-    const cone = Math.atan(this.radius / FIRE_CONE_REF);
+    const manned = this.buildFiringLine(n);
+    if (manned === 0) return;
+
+    /*
+     * Every shot flies dead straight. Width comes from where bullets start, not
+     * from which way they point, so each emitter only scatters its shots across
+     * the gap to its neighbour and the columns tile the formation without holes.
+     * Spreading by angle buys the same coverage at the cost of accuracy: the
+     * further a bullet travels, the further it has wandered from where it aimed.
+     */
+    const jitter = ((this.radius * 2) / manned) * FIRE_COLUMN_FILL * 0.5;
     // Damage scales with the TRUE count, not the drawn count, so growing past
     // the render cap still makes you stronger.
-    const perBullet = Math.max(1, (this.count * w.power) / (emitters * w.pellets));
+    const perBullet = Math.max(1, (this.count * w.power) / (manned * w.pellets));
 
-    let placed = 0;
-    for (let k = 0; k < MAX_BLUE_RENDER && placed < emitters; k++) {
-      const slot = frontOrder[k];
-      if (slot >= n) continue;
-      placed++;
+    for (let c = 0; c < manned; c++) {
+      const slot = this.lineSlot[c];
       const ox = this.blueX[slot];
       const oy = this.blueY[slot];
-      // Fire is fixed forward: what you hit is decided by where you stand, which
-      // is what makes shooting an objective cost you swarm control.
-      const emitterAim = 0;
       for (let p = 0; p < w.pellets; p++) {
         if (this.bulletCount >= MAX_BULLET) return;
-        // A multi-pellet volley fans evenly across the cone; a single-shot
-        // weapon scatters within it. Either way the swept width is the same.
-        const spread = emitterAim + (w.pellets > 1
-          ? (p / (w.pellets - 1) - 0.5) * 2 * cone
-          : this.rng.range(-cone, cone));
+        // A multi-pellet shot lays its pellets out side by side; a single-shot
+        // weapon takes a random column in the same band. Same swept width.
+        const lateral = w.pellets > 1
+          ? (p / (w.pellets - 1) - 0.5) * 2 * jitter
+          : this.rng.range(-jitter, jitter);
         const j = this.bulletCount++;
-        this.bulX[j] = ox;
+        this.bulX[j] = ox + lateral;
         this.bulY[j] = oy;
-        this.bulVX[j] = Math.sin(spread) * w.speed;
-        this.bulVY[j] = Math.cos(spread) * w.speed;
+        this.bulVX[j] = 0;
+        this.bulVY[j] = w.speed;
         this.bulLife[j] = BULLET_RANGE / w.speed;
         this.bulDmg[j] = perBullet;
       }
