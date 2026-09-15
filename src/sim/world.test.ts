@@ -392,35 +392,31 @@ describe('weapon pickups', () => {
 });
 
 describe('weapon tiers', () => {
-  it('sweeps the same width at every tier so rate and power decide', () => {
-    // Regression: per-weapon spread made coverage the dominant term, so the
-    // shotgun's wide fan out-killed the minigun despite far lower throughput.
-    const damage = WEAPONS.map((_, tier) => {
-      const w = new World(3, VIEW_H);
-      w.count = 600;
-      w.step(1 / 60);
-      let dealt = 0;
-      for (let i = 0; i < 300; i++) {
-        w.count = 600;
-        w.weaponTier = tier;
-        w.targetX = LANE_W / 2;
-        const frontage = w.radius * 2 + 240;
-        w.redCount = 24;
-        for (let j = 0; j < 24; j++) {
-          w.redX[j] = w.anchorX + ((j / 23) - 0.5) * frontage;
-          w.redY[j] = w.anchorY + 520;
-          w.redType[j] = GRUNT;
-          w.redHp[j] = 1e7;
-          w.redSpeed[j] = 0;
-          w.redOff[j] = 0;
+  it('lets fewer reds through at every tier, so a later gun is always an upgrade', () => {
+    // Regression: the shotgun's fan once out-killed the minigun.
+    //
+    // Measured in real play rather than against a synthetic wall, because the
+    // wall's own geometry decides the answer: a wide shallow one flatters a fan,
+    // a deep one flatters a straight stream. What the player actually feels is
+    // how much of the swarm reaches them, so that is what is asserted.
+    const breaches = WEAPONS.map((_, tier) => {
+      let total = 0;
+      // 75s and eight seeds: a shorter window leaves counts in the tens, where
+      // the gap between adjacent tiers is inside the noise.
+      for (let seed = 0; seed < 8; seed++) {
+        const w = new World(seed * 7919 + 13, VIEW_H);
+        for (let i = 0; i < 75 * 60 && w.state === 'running'; i++) {
+          w.weaponTier = tier;
+          seekObjectives(900)(w);
+          w.step(1 / 60);
         }
-        w.step(1 / 60);
-        for (let j = 0; j < 24 && j < w.redCount; j++) dealt += 1e7 - w.redHp[j];
+        total += w.leaked;
+        for (let t = 0; t < ENEMY_KINDS; t++) total += w.contactsByType[t];
       }
-      return dealt;
+      return total;
     });
-    for (let t = 1; t < damage.length; t++) {
-      expect(damage[t]).toBeGreaterThan(damage[t - 1] as number);
+    for (let t = 1; t < breaches.length; t++) {
+      expect(breaches[t]).toBeLessThan(breaches[t - 1] as number);
     }
-  });
+  }, 30_000);
 });

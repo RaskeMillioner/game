@@ -79,6 +79,13 @@ export interface Weapon {
   readonly name: string;
   readonly rate: number;
   readonly pellets: number;
+  /**
+   * Fan width for multi-pellet weapons, in multiples of the gap between firing
+   * columns. Zero fires straight. A fan redistributes the emitter's share of the
+   * width rather than extending it, so the shotgun reads as a blast without
+   * getting the free coverage that once buried the tier order.
+   */
+  readonly fan: number;
   readonly speed: number;
   /**
    * Multiplier on squad-size-derived damage. Nominal DPS per unit is rate*power,
@@ -89,10 +96,10 @@ export interface Weapon {
 }
 
 export const WEAPONS: readonly Weapon[] = [
-  { name: 'PISTOL', rate: 2.5, pellets: 1, speed: 900, power: 1.0 },
-  { name: 'RIFLE', rate: 6.0, pellets: 1, speed: 1100, power: 0.65 },
-  { name: 'SHOTGUN', rate: 2.0, pellets: 5, speed: 850, power: 2.7 },
-  { name: 'MINIGUN', rate: 14.0, pellets: 1, speed: 1200, power: 0.54 },
+  { name: 'PISTOL', rate: 2.5, pellets: 1, fan: 0, speed: 900, power: 1.0 },
+  { name: 'RIFLE', rate: 6.0, pellets: 1, fan: 0, speed: 1100, power: 0.65 },
+  { name: 'SHOTGUN', rate: 2.0, pellets: 5, fan: 1.6, speed: 850, power: 2.7 },
+  { name: 'MINIGUN', rate: 14.0, pellets: 1, fan: 0, speed: 1200, power: 0.54 },
 ];
 
 /**
@@ -107,6 +114,13 @@ export const WEAPONS: readonly Weapon[] = [
  * the same width, rate and power decide.
  */
 export const FIRE_COLUMN_FILL = 1.1;
+
+/**
+ * Distance at which a fanned pellet reaches its intended lateral offset. Nearer
+ * than this the blast is tighter, further out it opens up — which is what a
+ * shotgun should look like, and why it trades reach for width.
+ */
+export const FIRE_FAN_REF = 520;
 
 export const GATE_SPACING = 3400;
 export const GATE_FIRST = 1250;

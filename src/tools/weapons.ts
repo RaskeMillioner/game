@@ -22,15 +22,16 @@ const WALL_ROWS = 6;
 const WALL = WALL_COLS * WALL_ROWS;
 const FULL_HP = 1e7;
 
-interface Result { dps: number; spread: number }
+interface Result { dps: number; spread: number; kills: number }
 
 /**
  * Damage per second landed, plus how many distinct columns of the wall were
  * touched — coverage is the half of weapon power that nominal dps hides.
  */
-function measure(tier: number, count: number, seeds: number): Result {
+function measure(tier: number, count: number, seeds: number, hp = FULL_HP): Result {
   let damage = 0;
   let touched = 0;
+  let kills = 0;
   for (let s = 0; s < seeds; s++) {
     const w = new World(s * 5449 + 7, VIEW_H);
     w.count = count;
@@ -50,14 +51,14 @@ function measure(tier: number, count: number, seeds: number): Result {
           w.redX[j] = w.anchorX + ((c / (WALL_COLS - 1)) - 0.5) * frontage;
           w.redY[j] = w.anchorY + 420 + r * 210;
           w.redType[j] = GRUNT;
-          w.redHp[j] = FULL_HP;
+          w.redHp[j] = hp;
           w.redSpeed[j] = 0;
           w.redOff[j] = 0;
         }
       }
       w.step(DT);
       for (let j = 0; j < WALL && j < w.redCount; j++) {
-        const dealt = FULL_HP - w.redHp[j];
+        const dealt = hp - w.redHp[j];
         if (dealt > 0) {
           damage += dealt;
           hitCols.add(Math.floor(j / WALL_ROWS));
@@ -65,18 +66,22 @@ function measure(tier: number, count: number, seeds: number): Result {
       }
     }
     touched += hitCols.size;
+    kills += w.kills;
   }
-  return { dps: damage / seeds / SECONDS, spread: touched / seeds };
+  return { dps: damage / seeds / SECONDS, spread: touched / seeds, kills: kills / seeds / SECONDS };
 }
 
 const SIZES = [60, 300, 900];
-console.log('weapon     nominal/unit  ' + SIZES.map((n) => `dmg/s @${n}`.padStart(13)).join('') + '   cols hit');
+console.log('weapon     nominal/unit  ' + SIZES.map((n) => `dmg/s @${n}`.padStart(12)).join('') + '  cols  kills/s @900');
 for (let t = 0; t < WEAPONS.length; t++) {
   const w = WEAPONS[t];
   const rows = SIZES.map((n) => measure(t, n, 3));
+  // Against 1-hp targets, damage poured into an already-dead column is wasted,
+  // so this is the number the player actually feels: coverage, not throughput.
+  const lethal = measure(t, 900, 3, 1);
   console.log(
     `${w.name.padEnd(10)} ${(w.rate * w.power).toFixed(2).padStart(10)}  ` +
-    rows.map((r) => r.dps.toFixed(0).padStart(13)).join('') +
-    `   ${rows[2].spread.toFixed(1)}/${WALL_COLS}`,
+    rows.map((r) => r.dps.toFixed(0).padStart(12)).join('') +
+    `  ${rows[2].spread.toFixed(0)}/${WALL_COLS}  ${lethal.kills.toFixed(1).padStart(12)}`,
   );
 }

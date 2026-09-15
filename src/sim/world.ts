@@ -2,7 +2,7 @@ import { Grid } from '../core/grid.js';
 import { Rng } from '../core/rng.js';
 import {
   ANCHOR_FOLLOW, BLUE_FOLLOW, BREAKTHROUGH_PAD, BULLET_RADIUS, BULLET_RANGE, CONTACT_PAD, CORPSE_LIFE,
-  FIRE_COLUMN_FILL, LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
+  FIRE_COLUMN_FILL, FIRE_FAN_REF, LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
   RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
   START_BLUE, WEAPONS,
 } from './config.js';
@@ -356,16 +356,24 @@ export class World {
       const oy = this.blueY[slot];
       for (let p = 0; p < w.pellets; p++) {
         if (this.bulletCount >= MAX_BULLET) return;
-        // A multi-pellet shot lays its pellets out side by side; a single-shot
-        // weapon takes a random column in the same band. Same swept width.
-        const lateral = w.pellets > 1
-          ? (p / (w.pellets - 1) - 0.5) * 2 * jitter
-          : this.rng.range(-jitter, jitter);
         const j = this.bulletCount++;
-        this.bulX[j] = ox + lateral;
         this.bulY[j] = oy;
-        this.bulVX[j] = 0;
-        this.bulVY[j] = w.speed;
+        if (w.fan > 0 && w.pellets > 1) {
+          // A fanned pellet is aimed at an offset it reaches at FIRE_FAN_REF:
+          // tight up close, open further out. The angle is small enough that a
+          // pellet still lands near where it was pointed.
+          const target = (p / (w.pellets - 1) - 0.5) * 2 * jitter * w.fan;
+          const angle = Math.atan(target / FIRE_FAN_REF);
+          this.bulX[j] = ox;
+          this.bulVX[j] = Math.sin(angle) * w.speed;
+          this.bulVY[j] = Math.cos(angle) * w.speed;
+        } else {
+          // Everything else flies dead straight and takes a random column
+          // within the gap to its neighbour, so the columns tile without holes.
+          this.bulX[j] = ox + this.rng.range(-jitter, jitter);
+          this.bulVX[j] = 0;
+          this.bulVY[j] = w.speed;
+        }
         this.bulLife[j] = BULLET_RANGE / w.speed;
         this.bulDmg[j] = perBullet;
       }
