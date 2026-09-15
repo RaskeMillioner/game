@@ -21,6 +21,8 @@ export interface Objective {
   flash: number;
   /** True once the squad has passed it and its reward has been settled. */
   resolved: boolean;
+  /** True only if the reward was actually taken, as opposed to left behind. */
+  collected: boolean;
 }
 
 export const OBJECTIVE_W = 132;
@@ -66,24 +68,33 @@ export function damageObjective(o: Objective, amount: number): void {
   }
 }
 
-/** Applies a passed objective's reward. Returns the new count and weapon tier. */
+/**
+ * Settles a passed objective. Breaking a crate open is only half of it: the gun
+ * lies where it fell, so the crowd has to actually run over it. Passing by in
+ * the lane leaves it behind, which makes taking one a positioning decision
+ * rather than an automatic reward for shooting.
+ */
 export function collectObjective(
   o: Objective,
   count: number,
   weaponTier: number,
+  overlapped: boolean,
 ): { count: number; weaponTier: number } {
   o.resolved = true;
+  if (!o.broken) return { count, weaponTier };
   switch (o.kind) {
     case 'weapon':
-      return o.broken
-        ? { count, weaponTier: Math.min(WEAPONS.length - 1, weaponTier + o.value) }
-        : { count, weaponTier };
+      if (!overlapped) return { count, weaponTier };
+      o.collected = true;
+      return { count, weaponTier: Math.min(WEAPONS.length - 1, weaponTier + o.value) };
     case 'recruit':
-      return o.broken
-        ? { count: Math.min(MAX_BLUE, count + o.value), weaponTier }
-        : { count, weaponTier };
+      o.collected = true;
+      return { count: Math.min(MAX_BLUE, count + o.value), weaponTier };
   }
 }
+
+/** Half-width of the band in which the crowd sweeps up a fallen pickup. */
+export const PICKUP_PAD = 24;
 
 /**
  * Objectives are offset to one side of the lane on purpose: lining one up means
@@ -118,6 +129,7 @@ export function buildObjectives(rng: Rng, count: number, gateYs: readonly number
       broken: false,
       flash: 0,
       resolved: false,
+      collected: false,
     });
   }
   return out;

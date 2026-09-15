@@ -326,7 +326,11 @@ export class Renderer {
       ctx.globalAlpha = fade;
 
       const flash = o.flash;
-      const brokenFlat = o.broken; // weapon/recruit only; multiplier never breaks
+      // Cracked open but not yet taken is a live pickup lying in the lane, not
+      // a spent husk: it keeps its colour and its label so the player can see
+      // there is still something there to run over.
+      const brokenFlat = o.broken;
+      const taken = o.collected;
       const height = (brokenFlat ? OBJECTIVE_H * 0.22 : OBJECTIVE_H) * scale * (1 + flash * 0.12);
       const baseX = base.x;
       const baseY = base.y;
@@ -334,7 +338,7 @@ export class Renderer {
       const leftX = baseX - halfW;
       const rightX = baseX + halfW;
 
-      ctx.fillStyle = brokenFlat ? OBJ_BROKEN_COLOR : OBJ_COLOR[o.kind as ObjectiveKind];
+      ctx.fillStyle = taken ? OBJ_BROKEN_COLOR : OBJ_COLOR[o.kind as ObjectiveKind];
       this.drawObjectiveSilhouette(o.kind, leftX, rightX, baseY, topY, scale, brokenFlat);
 
       if (flash > 0.01) {
@@ -357,19 +361,19 @@ export class Renderer {
       // Every structure states what it gives. A silhouette alone does not tell
       // the player whether diverting fire onto it is worth the swarm they let
       // through, which is the entire decision being asked of them.
-      const label = brokenFlat ? 'TAKEN' : objectiveLabel(o, weaponTier);
+      const label = taken ? 'TAKEN' : objectiveLabel(o, weaponTier);
       const panelW = (rightX - leftX) * 0.9;
       const panelH = Math.abs(baseY - topY);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = brokenFlat ? '#7c8394' : '#0d0d12';
+      ctx.fillStyle = taken ? '#7c8394' : '#0d0d12';
       fitText(ctx, label, baseX, baseY - panelH * 0.55, panelW, panelH * 0.42, 34 * scale);
 
-      if (!brokenFlat) {
+      if (!taken) {
         ctx.fillStyle = 'rgba(255,255,255,0.92)';
         fitText(
           ctx,
-          objectiveCaption(o),
+          brokenFlat ? 'RUN OVER IT' : objectiveCaption(o),
           baseX,
           topY - Math.max(6, 20 * scale),
           panelW * 1.1,

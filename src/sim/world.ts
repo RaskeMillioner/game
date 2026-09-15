@@ -2,7 +2,7 @@ import { Grid } from '../core/grid.js';
 import { Rng } from '../core/rng.js';
 import {
   ANCHOR_FOLLOW, BLUE_FOLLOW, BREAKTHROUGH_PAD, BULLET_RADIUS, BULLET_RANGE, CONTACT_PAD, CORPSE_LIFE,
-  LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
+  FIRE_CONE_REF, LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
   RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
   START_BLUE, WEAPONS,
 } from './config.js';
@@ -13,6 +13,7 @@ import { formationRadius, frontOrder, slotLag, slotX, slotY } from './formation.
 import { applyGate, buildGates, Gate, gateHit } from './gates.js';
 import {
   buildObjectives, collectObjective, damageObjective, Objective, OBJECTIVE_H, OBJECTIVE_W,
+  PICKUP_PAD,
 } from './objectives.js';
 import { Director } from './swarm.js';
 
@@ -298,6 +299,8 @@ export class World {
     const n = this.rendered;
     if (n === 0) return;
     const emitters = Math.min(n, MAX_EMITTERS);
+    // Fire spans the unit circle and no more, whatever the weapon.
+    const cone = Math.atan(this.radius / FIRE_CONE_REF);
     // Damage scales with the TRUE count, not the drawn count, so growing past
     // the render cap still makes you stronger.
     const perBullet = Math.max(1, (this.count * w.power) / (emitters * w.pellets));
@@ -311,12 +314,14 @@ export class World {
       const oy = this.blueY[slot];
       // Fire is fixed forward: what you hit is decided by where you stand, which
       // is what makes shooting an objective cost you swarm control.
-      const emitterAim = this.rng.range(-0.03, 0.03);
+      const emitterAim = 0;
       for (let p = 0; p < w.pellets; p++) {
         if (this.bulletCount >= MAX_BULLET) return;
+        // A multi-pellet volley fans evenly across the cone; a single-shot
+        // weapon scatters within it. Either way the swept width is the same.
         const spread = emitterAim + (w.pellets > 1
-          ? (p / (w.pellets - 1) - 0.5) * 2 * w.spread
-          : this.rng.range(-w.spread, w.spread));
+          ? (p / (w.pellets - 1) - 0.5) * 2 * cone
+          : this.rng.range(-cone, cone));
         const j = this.bulletCount++;
         this.bulX[j] = ox;
         this.bulY[j] = oy;
@@ -437,7 +442,8 @@ export class World {
     for (const o of this.objectives) {
       if (o.resolved || this.anchorY < o.y) continue;
       const before = this.rendered;
-      const result = collectObjective(o, this.count, this.weaponTier);
+      const overlapped = Math.abs(this.anchorX - o.x) <= this.radius + PICKUP_PAD;
+      const result = collectObjective(o, this.count, this.weaponTier, overlapped);
       this.count = result.count;
       this.weaponTier = result.weaponTier;
       this.seedNewSlots(before);

@@ -43,8 +43,10 @@ function gateSeeker(preferGood: boolean): Strategy {
 function objectiveSeeker(commit: number): Strategy {
   const fallback = gateSeeker(true);
   return (w, t) => {
+    // Stay on it until it is resolved, not merely broken: a cracked crate is a
+    // pickup lying in the lane, and the crowd has to run over it to take it.
     const o = w.objectives.find((x) => !x.resolved && x.y > w.anchorY - 50);
-    if (o && !o.broken && o.y - w.anchorY < commit) {
+    if (o && o.y - w.anchorY < commit) {
       w.targetX = o.x;
       return;
     }

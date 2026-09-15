@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_RED, START_BLUE } from './config.js';
+import { LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_RED, START_BLUE, WEAPONS } from './config.js';
 import {
   BRUTE, ENEMIES, ENEMY_KINDS, enemyHp, GRUNT, pickType, RUNNER,
 } from './enemies.js';
@@ -40,8 +40,10 @@ function seekGate(preferGood: boolean) {
 function seekObjectives(commit: number) {
   const fallback = seekGate(true);
   return (w: World): void => {
+    // Stay on it until it is resolved, not merely broken: a cracked crate is a
+    // pickup lying in the lane, and the crowd has to run over it to take it.
     const o = w.objectives.find((x) => !x.resolved && x.y > w.anchorY - 50);
-    if (o && !o.broken && o.y - w.anchorY < commit) {
+    if (o && o.y - w.anchorY < commit) {
       w.targetX = o.x;
       return;
     }
@@ -303,5 +305,91 @@ describe('enemy types', () => {
     // It survived, but the fire landed: under a one-kill-per-pierce model a
     // single bullet would have deleted it regardless of hp.
     expect(w.redHp[brute]).toBeLessThan(1e6);
+  });
+});
+
+describe('weapon pickups', () => {
+  /** Runs until the squad passes `o`, holding a fixed lane position. */
+  function passAt(seed: number, holdX: (o: { x: number }) => number) {
+    const w = new World(seed, VIEW_H);
+    w.count = 500;
+    // Not the first crate: it sits ~0.6s into the run, before a single volley
+    // has landed, so it would test spawn timing rather than the pickup rule.
+    const crate = w.objectives.find((o) => o.kind === 'weapon' && o.y > 2500);
+    expect(crate).toBeDefined();
+    if (!crate) throw new Error('no weapon crate');
+    while (w.anchorY < crate.y && w.state === 'running') {
+      w.targetX = holdX(crate);
+      w.step(1 / 60);
+    }
+    return { w, crate };
+  }
+
+  it('grants the weapon when the crowd runs over the broken crate', () => {
+    const { w, crate } = passAt(11, (o) => o.x);
+    expect(crate.broken).toBe(true);
+    expect(crate.collected).toBe(true);
+    expect(w.weaponTier).toBeGreaterThan(0);
+  });
+
+  it('leaves a broken crate behind when the crowd passes wide of it', () => {
+    // Shot open from across the lane, then not driven over: breaking it is only
+    // half the job, the gun still has to be picked up.
+    const { w, crate } = passAt(11, (o) => (o.x < LANE_W / 2 ? LANE_W - 30 : 30));
+    expect(crate.resolved).toBe(true);
+    expect(crate.collected).toBe(false);
+    expect(w.weaponTier).toBe(0);
+  });
+
+  it('gives nothing for running over a crate that was never broken', () => {
+    const w = new World(11, VIEW_H);
+    // Too few blues to crack it open before it is reached.
+    w.count = 3;
+    const crate = w.objectives.find((o) => o.kind === 'weapon' && o.y > 2500);
+    if (!crate) throw new Error('no weapon crate');
+    // Unbreakable for this test: hp is mutable, maxHp is not, so drive hp up
+    // rather than reshaping the objective.
+    crate.hp = 1e9;
+    while (w.anchorY < crate.y && w.state === 'running') {
+      w.targetX = crate.x;
+      w.step(1 / 60);
+    }
+    expect(crate.broken).toBe(false);
+    expect(crate.collected).toBe(false);
+    expect(w.weaponTier).toBe(0);
+  });
+});
+
+describe('weapon tiers', () => {
+  it('sweeps the same width at every tier so rate and power decide', () => {
+    // Regression: per-weapon spread made coverage the dominant term, so the
+    // shotgun's wide fan out-killed the minigun despite far lower throughput.
+    const damage = WEAPONS.map((_, tier) => {
+      const w = new World(3, VIEW_H);
+      w.count = 600;
+      w.step(1 / 60);
+      let dealt = 0;
+      for (let i = 0; i < 300; i++) {
+        w.count = 600;
+        w.weaponTier = tier;
+        w.targetX = LANE_W / 2;
+        const frontage = w.radius * 2 + 240;
+        w.redCount = 24;
+        for (let j = 0; j < 24; j++) {
+          w.redX[j] = w.anchorX + ((j / 23) - 0.5) * frontage;
+          w.redY[j] = w.anchorY + 520;
+          w.redType[j] = GRUNT;
+          w.redHp[j] = 1e7;
+          w.redSpeed[j] = 0;
+          w.redOff[j] = 0;
+        }
+        w.step(1 / 60);
+        for (let j = 0; j < 24 && j < w.redCount; j++) dealt += 1e7 - w.redHp[j];
+      }
+      return dealt;
+    });
+    for (let t = 1; t < damage.length; t++) {
+      expect(damage[t]).toBeGreaterThan(damage[t - 1] as number);
+    }
   });
 });

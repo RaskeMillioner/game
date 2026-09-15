@@ -15,7 +15,7 @@ export class Director {
    */
   rate(distance: number): number {
     const d = distance / 1000;
-    return 1.1 + d * 2.75 + d * d * 0.52;
+    return 1.15 + d * 2.95 + d * d * 0.55;
   }
 
   /** Returns how many reds to spawn this step. */

@@ -79,7 +79,6 @@ export interface Weapon {
   readonly name: string;
   readonly rate: number;
   readonly pellets: number;
-  readonly spread: number;
   readonly speed: number;
   /**
    * Multiplier on squad-size-derived damage. Nominal DPS per unit is rate*power,
@@ -90,11 +89,24 @@ export interface Weapon {
 }
 
 export const WEAPONS: readonly Weapon[] = [
-  { name: 'PISTOL', rate: 2.5, pellets: 1, spread: 0.0, speed: 900, power: 1.0 },
-  { name: 'RIFLE', rate: 6.0, pellets: 1, spread: 0.02, speed: 1100, power: 0.65 },
-  { name: 'SHOTGUN', rate: 2.0, pellets: 5, spread: 0.26, speed: 850, power: 2.7 },
-  { name: 'MINIGUN', rate: 14.0, pellets: 1, spread: 0.06, speed: 1200, power: 0.54 },
+  { name: 'PISTOL', rate: 2.5, pellets: 1, speed: 900, power: 1.0 },
+  { name: 'RIFLE', rate: 6.0, pellets: 1, speed: 1100, power: 0.65 },
+  { name: 'SHOTGUN', rate: 2.0, pellets: 5, speed: 850, power: 2.7 },
+  { name: 'MINIGUN', rate: 14.0, pellets: 1, speed: 1200, power: 0.54 },
 ];
+
+/**
+ * Every weapon covers exactly the crowd's own width — the fire cone is derived
+ * from the formation radius at this reference distance, not from a per-weapon
+ * spread.
+ *
+ * Per-weapon spread made coverage the dominant term and buried the tier order:
+ * the shotgun's wide fan swept the whole lane while the minigun's tight stream
+ * reached about half of it, so the minigun landed more raw damage yet killed
+ * less, dumping it into a narrow strip and overkilling there while the flanks
+ * walked past untouched. With coverage equal, rate and power decide.
+ */
+export const FIRE_CONE_REF = 640;
 
 export const GATE_SPACING = 3400;
 export const GATE_FIRST = 1250;
