@@ -1,7 +1,7 @@
 import { Grid } from '../core/grid.js';
 import { Rng } from '../core/rng.js';
 import {
-  ANCHOR_FOLLOW, BLUE_FOLLOW, BREAKTHROUGH_PAD, BULLET_LIFE, BULLET_RADIUS, CONTACT_PAD, CORPSE_LIFE,
+  ANCHOR_FOLLOW, BLUE_FOLLOW, BREAKTHROUGH_PAD, BULLET_RADIUS, BULLET_RANGE, CONTACT_PAD, CORPSE_LIFE,
   LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
   RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
   START_BLUE, WEAPONS,
@@ -322,7 +322,7 @@ export class World {
         this.bulY[j] = oy;
         this.bulVX[j] = Math.sin(spread) * w.speed;
         this.bulVY[j] = Math.cos(spread) * w.speed;
-        this.bulLife[j] = BULLET_LIFE;
+        this.bulLife[j] = BULLET_RANGE / w.speed;
         this.bulDmg[j] = perBullet;
       }
     }

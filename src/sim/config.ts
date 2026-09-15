@@ -19,7 +19,12 @@ export const BLUE_FOLLOW = 11;
 export const ANCHOR_FOLLOW = 14;
 export const DRAG_GAIN = 1.15;
 
-export const MAX_RED = 1400;
+/**
+ * Red capacity. Spawning silently stops at the cap, so a swarm that saturates it
+ * quietly flattens late-run difficulty — headroom here is a correctness concern,
+ * not just a memory one.
+ */
+export const MAX_RED = 3200;
 /** Baseline contact radius; per-type radii live in enemies.ts. */
 export const RED_RADIUS = 9;
 /**
@@ -52,7 +57,16 @@ export const CONTACT_PAD = 6;
 
 export const MAX_BULLET = 1400;
 export const BULLET_RADIUS = 5;
-export const BULLET_LIFE = 1.1;
+/**
+ * How far a shot reaches, in world units, the same for every weapon. Lifetime is
+ * derived from it so that a faster bullet arrives sooner rather than travelling
+ * further — range used to fall out of speed x lifetime, which quietly handed the
+ * minigun a third more reach than the pistol on top of its rate.
+ *
+ * Reds spawn about 1275 units ahead of the squad, so anything below that leaves
+ * the front of the swarm untouchable.
+ */
+export const BULLET_RANGE = 1900;
 
 /**
  * Firing is emitter-capped: at most this many units actually spawn bullets, and
