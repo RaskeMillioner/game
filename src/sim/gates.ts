@@ -56,14 +56,20 @@ export function applyGate(op: GateOp, count: number): { count: number; weaponTie
 }
 
 /**
- * Builds the gate sequence for a run. Weapon gates are placed on a fixed cadence
- * so the escalation is authored, not left to luck; the rest are count choices
- * where one side is meaningfully better than the other.
+ * Builds the gate sequence for a level. The ramp is indexed within the level,
+ * not across the campaign: every level starts at 16 blue with a pistol, so the
+ * growth curve inside a level has to be the same one every time for its
+ * difficulty to mean anything.
  */
-export function buildGates(rng: Rng, count: number): Gate[] {
+export function buildGates(
+  rng: Rng,
+  count: number,
+  first: number = GATE_FIRST,
+  spacing: number = GATE_SPACING,
+): Gate[] {
   const gates: Gate[] = [];
   for (let i = 0; i < count; i++) {
-    const y = GATE_FIRST + i * GATE_SPACING;
+    const y = first + i * spacing;
     let op: GateOp;
 
     const roll = rng.next();

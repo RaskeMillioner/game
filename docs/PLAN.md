@@ -8,9 +8,11 @@ Revised after the first playtests. The original plan described a top-down auto-r
 paired gates as the central decision; almost none of that survived contact with play, and
 this document describes what the game actually is and where it goes next.
 
+Phases 4 and 5 are built. The game is a twelve-level campaign, not one endless run.
+
 ## 1. Where the code is
 
-Playable and deployed at `raskemillioner.github.io/game/`. 16 kB, no runtime dependencies.
+Playable and deployed at `raskemillioner.github.io/game/`. 34 kB, 12 kB gzipped, no runtime dependencies.
 
 | Built | Notes |
 |---|---|
@@ -21,10 +23,13 @@ Playable and deployed at `raskemillioner.github.io/game/`. 16 kB, no runtime dep
 | Breakthrough attrition | A red that crosses behind the crowd kills one blue and dies |
 | Gates | Single-option, narrow, missable; take it or dodge it |
 | Objectives | Weapon crates and recruit pods, shot while the swarm closes |
-| Balance harness | Headless seeded probe, 60 runs per strategy; 15 sim tests |
+| Enemy archetypes | Grunt, runner, brute, exploder; per-unit hp and a damage-pool bullet model |
+| Levels | `LevelDef` + five templates generating a concrete spawn-event list from a stored seed |
+| Finish line and win state | Levels end at a line; `won` and `dead` are separate outcomes |
+| Campaign | Twelve levels, level select, next-level unlock persisted in `localStorage` |
+| Balance harness | Headless seeded probe: strategy survival, per-type attribution, and per-level win rate against a target ramp; 48 tests |
 
-**Not built:** levels, win condition, enemy variety, bosses, hazards, audio, juice, menus.
-Everything today is one endless run against one enemy type.
+**Not built:** corridor shape, hazards, new structure kinds, bosses, audio, juice.
 
 ## 2. Confirmed design criteria
 
@@ -53,18 +58,20 @@ known starting state, so a level's difficulty means something.
 
 ## 3. The architecture gap
 
-Three things are hardcoded that the next phase needs to be data:
+Of the three things phase 4 named as hardcoded, two are now data:
 
-1. **One enemy type.** Reds are a struct-of-arrays with position and speed. No type, no HP.
-2. **Waves are a formula.** `Director.rate()` is a quadratic in distance. There is no way to
-   say "twelve runners at four seconds, then a brute".
-3. **The lane is a constant.** `LANE_W = 720` is baked into the sim, the clamp, spawning
-   and the renderer. Nothing can narrow, bend or fork.
+1. ~~**One enemy type.**~~ Built: `redType` and `redHp` alongside the position arrays, with a
+   static per-type table, in phase 4.
+2. ~~**Waves are a formula.**~~ Built: `Director.rate()` is gone. A template generates a list
+   of `SpawnWave`s and the sim only decides where reds go, never how many or when.
+3. **The lane is a constant.** `LANE_W = 720` is still baked into the sim, the clamp,
+   spawning and the renderer. Nothing can narrow, bend or fork. This is phase 6.
 
-### Enemy types
+### Enemy types — built
 
-Add `redType: Uint8Array` and `redHp: Float32Array` alongside the existing arrays, with a
-static per-type table: hp, speed range, contact cost, radius, shade.
+`redType: Uint8Array` and `redHp: Float32Array` sit alongside the existing arrays, with a
+static per-type table: hp, speed range, contact cost, radius, shade. Shipped values are in
+`enemies.ts` and differ from the sketch below where the probe said they should.
 
 | Type | HP | Speed | Cost on contact | Role |
 |---|---|---|---|---|
@@ -73,33 +80,52 @@ static per-type table: hp, speed range, contact cost, radius, shade.
 | Brute | 40–200 | 70–90 | 6 blue | Soaks the line; decide whether to spend fire on it or reposition |
 | Exploder | 2 | 150–190 | 8 blue | Makes a leak frightening rather than a slow drip |
 
-The damage model changes with it: a bullet's `pierce` budget becomes a damage pool, and each
-red consumes `min(hp, remaining)`. For 1-HP enemies that is identical to today's behaviour,
-so grunts are unaffected and the change is backward-compatible.
+The damage model changed with it: a bullet's `pierce` budget is a damage pool, and each red
+consumes `min(hp, remaining)`. For 1-HP enemies that is identical to the old behaviour, so
+grunts were unaffected. Per-unit hp now scales with distance multiplied by the level's
+difficulty, so one curve covers both the ramp inside a level and the ramp across the
+campaign.
 
-Rendering stays batched — one `Path2D` per type rather than per unit, so four fills instead
+Rendering stayed batched — one `Path2D` per type rather than per unit, so four fills instead
 of one. Overlap within a type is still invisible, so still no depth sort.
 
-### Levels
+### Levels — built
 
 ```ts
 interface LevelDef {
   id: number;
   name: string;
   seed: number;          // stored, never derived from Math.random — level 7 must be level 7
-  template: TemplateId;  // 'tide' | 'runner-rush' | 'brute-wall' | 'gauntlet' | 'choke'
-  difficulty: number;    // scalar driving spawn rate and enemy HP
+  template: TemplateId;  // 'tide' | 'runner-rush' | 'brute-wall' | 'gauntlet' | 'choke' | 'endless'
+  difficulty: number;    // scalar on spawn rate and enemy hp
   length: number;        // world units to the finish line
   mix: Partial<Record<EnemyType, number>>;  // spawn weights
-  corridor: CorridorSpec;
-  hazards: HazardSpec;
-  structures: StructureSpec;
+  structures: StructureSpec;                // gate and objective cadence
 }
 ```
 
-A template is a pure function `(spec, seed) -> concrete event list`. Generation is
-deterministic, so a level is reproducible, diffable, and measurable by the probe. Levels end
-at a finish line rather than in death; reaching it completes the level.
+`corridor` and `hazards` are deliberately absent until phase 6 owns them: a field nothing
+reads is a promise, not a design.
+
+A template is a pure function `(def, seed) -> SpawnWave[]`, each wave carrying its type,
+count, spread and a baked hp — so the sim never re-derives difficulty at runtime. Generation
+is deterministic, so a level is reproducible, diffable and measurable by the probe.
+
+The endless run survives as a template of its own. It is not in the campaign; it is the
+baseline the harness measures against, and keeping it exactly reproduces the balance the
+first four phases were tuned to — which is what let the campaign inherit tuning that already
+plays rather than starting from nothing.
+
+Two decisions worth writing down:
+
+- **Wave size grows with the spawn rate; wave spacing does not shrink.** A late-level tide is
+  a few hundred events rather than tens of thousands. At 0.12s between waves the squad
+  advances 29 units, well inside the depth reds are scattered over, so the tide reads exactly
+  as continuous as the old per-frame accumulator did.
+- **Structure ramps are indexed within a level, not across the campaign.** Every level starts
+  at 16 blue with a pistol, so the growth curve inside a level has to be the same one every
+  time for its difficulty to mean anything. Difficulty comes from the enemies, not from
+  handing later levels weaker gates.
 
 ### Corridor
 
@@ -113,50 +139,77 @@ a list of spans rather than one, which is the only genuinely awkward part.
 
 | # | Phase | Output | Owner |
 |---|---|---|---|
-| 4 | Enemy types | Per-unit HP, damage-pool bullets, grunt/runner/brute/exploder, per-type batching | Me |
-| 5 | Level system | `LevelDef`, template generators, finish line, win/lose, level select, campaign flow | Split |
+| 4 | ~~Enemy types~~ | **Done.** Per-unit HP, damage-pool bullets, grunt/runner/brute/exploder, per-type batching | Me |
+| 5 | ~~Level system~~ | **Done.** `LevelDef`, template generators, finish line, win/lose, level select, campaign flow | Split |
 | 6 | Corridor + hazards | Corridor over worldY, narrowing and bends, static hazards that split the crowd | Me |
 | 7 | Structures | New objective kinds: turrets to free, barricades that must be broken to pass | Sonnet |
 | 8 | Juice + audio | Screen shake, hit flash, damage popups, synthesized SFX, no audio files | Sonnet |
 | 9 | Content pass | 20 levels generated, measured and tuned against the probe | Me |
 | 10 | Forks | Corridor returning multiple spans; only if levels feel same-y without it | Me |
 
-**Phase 4 is the gate on everything else.** Enemy variety is what makes a level feel
-different; corridors and hazards are dressing on top of it. If brutes and exploders do not
-change how a run plays, more level machinery will not help.
+**Phase 6 is next.** The lane is the last of the three hardcoded things, and `choke` is
+currently a density spike standing in for geometry it does not have yet.
 
-## 5. The probe has to grow up
+Phase 9 now inherits a working per-level harness rather than building one, and extends the
+campaign from twelve levels to twenty.
 
-Today the probe measures one endless run across six strategies. For a campaign it needs to
-answer a different question: *is level 12 tuned?*
+## 5. The probe grew up
 
-- Per-level win rate across N seeds for a reference strategy, flagging any level outside a
-  target band (roughly 45–70% for a competent player).
-- A difficulty curve across the campaign, so the ramp is visible as a shape rather than
-  asserted level by level.
-- Per-enemy-type kill and leak attribution, so "exploders are what is killing people on
-  level 9" is a measurement rather than a guess.
+Built in phase 5 rather than deferred to phase 9, because tuning twelve levels by hand was
+not tractable without it. The probe now reports, alongside the endless strategy table:
 
-This is the only reason tuning 20 levels is tractable at all. It is worth building properly
-at the start of phase 9 rather than bolted on at the end.
+- Per-level win rate across 40 seed variants under a reference strategy, flagged against a
+  target. The shipped level is deterministic, so running its one stored seed returns 0% or
+  100% and tells you nothing; what is measured is whether the template and difficulty put the
+  level in band, and the stored seed is one draw from that band.
+- A difficulty curve across the campaign, as a shape rather than a list of assertions.
+- Per-enemy-type kill, contact and leak attribution, priced in bodies lost.
+
+**The target is a ramp, not a flat band.** A first level that kills half the players who
+reach it is a broken first level however well it sits inside 45–70%. The probe targets 95%
+on level 1 falling to 50% on level 12, with a ±12 point tolerance; all twelve currently sit
+inside it.
+
+Two findings came straight out of using it:
+
+- Scaling a burst's size by difficulty *and* its hp by difficulty *and* the tide rate by
+  difficulty made the brute templates two to three times as steep as everything else, which
+  read as those levels being mistuned rather than as brutes being hard. Bursts no longer
+  scale with difficulty.
+- Templates differ enough in how hard they respond to the difficulty dial that the raw
+  scalars are not comparable between levels — `runner-rush` needs 1.30 for the same pressure
+  `brute-wall` reaches at 0.67. The campaign's ramp is the win-rate column, not the
+  difficulty column.
 
 ## 6. Risks
 
-- **Phase 4 invalidates the current balance.** Per-unit HP changes what a bullet is worth,
-  so every number tuned so far gets re-derived. Expected, and cheap because the probe is
-  headless — but it means no tuning effort before phase 4 is worth much.
-- **Exploders may be too swingy.** 8 bodies per leak against a 40-strong squad is a quarter
-  of the run gone in one mistake. Needs its own probe column from the day it lands.
+- ~~**Phase 4 invalidates the current balance.**~~ It did, and the probe re-derived it. The
+  endless template preserves that tuning exactly, which is what let phase 5 start from a
+  known-good curve instead of a blank one.
+- **Exploders are the single largest cost in a run.** The attribution column prices them at
+  ~42% of all bodies lost on an endless run, from a couple of leaks — brutes are the other
+  39%, grunts only 14%. That is the intended shape (a leak should be frightening), but it
+  means exploder weight is the most dangerous number in any level's mix.
+- **Each level is a whole run's worth of pacing.** 77–91 seconds to clear, twelve times over.
+  If the campaign is too long to sit through, the fix is shorter levels, not fewer.
 - **Generated levels can feel samey.** Templates plus seeds trade authorial control for
   volume. If level 9 and level 14 play the same, the fix is more templates, not more seeds.
 - **Forks fight the spawn model.** Reds spawn biased toward the squad's column and the
   anchor clamps to one span; a fork means deciding what the swarm does on the path not
   taken. This is why forks are last and conditional.
-- **Difficulty is still the hard part, not the code.** Everything above is tractable
-  engineering. Whether level 11 is fun is not, and only playtest answers it.
+- **A tuned win rate is not a fun level.** Every level now sits inside its target band, which
+  says only that a scripted reference player clears it about as often as intended. Whether
+  level 11 is *fun* is not something the probe can answer, and nothing but playtest will.
 
 ## 7. Open question for the next playtest
 
-Run length is currently ~85s for strong play, down from 120s before boost boards were
-removed. Once levels exist this stops mattering as a single number — each level sets its own
-length — but it is the first thing phase 9 has to decide: how long is one level, really?
+**How long is one level, really?** Levels currently run 12,000–23,000 world units, which the
+probe measures as 77–91 seconds for a winning run. That is a whole endless run's worth of
+pacing per level, and twelve of them back to back may be more than anyone wants in one
+sitting. The number to watch is not survival time any more — it is whether level 9 still
+feels worth starting after level 8.
+
+A second one, now that they exist: **do the templates read as different levels, or as the
+same level at different densities?** `runner-rush` and `brute-wall` diverge on the probe's
+leak column — 1.8% against 4.7% — but that is a measurement, not a feeling. If they play the
+same, the fix is more templates, not more seeds.

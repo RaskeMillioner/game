@@ -9,6 +9,9 @@ export const BRUTE = 2;
 export const EXPLODER = 3;
 export const ENEMY_KINDS = 4;
 
+/** The archetype ids as a type, so a level's spawn mix can be keyed by them. */
+export type EnemyType = typeof GRUNT | typeof RUNNER | typeof BRUTE | typeof EXPLODER;
+
 export interface EnemyStats {
   readonly name: string;
   /** Base hit points before the distance scaling below. */
@@ -63,9 +66,14 @@ export const ENEMIES: readonly EnemyStats[] = [
   },
 ];
 
-export function enemyHp(type: number, km: number): number {
+/**
+ * Hit points at a given scaling point. `scale` is distance in km multiplied by
+ * the level's difficulty: within one level it grows as the squad does, and
+ * across the campaign it lifts the whole curve without touching the shape.
+ */
+export function enemyHp(type: number, scale: number): number {
   const e = ENEMIES[type];
-  return e.hp + e.hpGrowth * km * km;
+  return e.hp + e.hpGrowth * scale * scale;
 }
 
 /**

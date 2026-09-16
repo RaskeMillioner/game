@@ -100,7 +100,13 @@ export const PICKUP_PAD = 24;
  * Objectives are offset to one side of the lane on purpose: lining one up means
  * leaving the position where your fire covers the swarm.
  */
-export function buildObjectives(rng: Rng, count: number, gateYs: readonly number[] = []): Objective[] {
+export function buildObjectives(
+  rng: Rng,
+  count: number,
+  gateYs: readonly number[] = [],
+  first: number = OBJECTIVE_FIRST,
+  spacing: number = OBJECTIVE_SPACING,
+): Objective[] {
   const out: Objective[] = [];
   /** Pushes an objective clear of any gate it would otherwise sit on top of. */
   const clearOfGates = (y: number): number => {
@@ -122,7 +128,7 @@ export function buildObjectives(rng: Rng, count: number, gateYs: readonly number
     out.push({
       kind,
       x: LANE_W * side,
-      y: clearOfGates(OBJECTIVE_FIRST + i * OBJECTIVE_SPACING),
+      y: clearOfGates(first + i * spacing),
       maxHp: hp,
       hp,
       value,
