@@ -7,7 +7,9 @@ import {
   objectiveCaption, objectiveLabel, type Objective, OBJECTIVE_H, OBJECTIVE_W,
   type ObjectiveKind,
 } from '../sim/objectives.js';
+import type { LevelDef } from '../sim/levels.js';
 import type { World } from '../sim/world.js';
+import { hitRect, layoutMenu, menuButton, type MenuLayout, type Rect } from './menu.js';
 import { CAM_HEIGHT, FAR_DZ, FOCAL, NEAR, Projector } from './projection.js';
 
 const TAU = Math.PI * 2;
@@ -61,6 +63,13 @@ const OBJ_COLOR: Record<ObjectiveKind, string> = {
   recruit: '#43d9a3',
 };
 const OBJ_BROKEN_COLOR = '#3a3a44';
+const COL_FINISH = '#f2f4fa';
+/** Deep enough that the band still reads as a band from across the lane. */
+const FINISH_DEPTH = 210;
+const FINISH_POST_H = 260;
+const FINISH_POST_W = 16;
+const COL_WIN = '#43d9a3';
+const COL_LOCKED = '#2a2a36';
 
 /**
  * Draws the whole world with a fixed, tiny number of fill calls: one path per
@@ -115,8 +124,68 @@ export class Renderer {
     this.drawCorpses(w);
     this.drawCrowds(w);
     this.drawBullets(w);
+    this.drawFinish(w);
     this.drawHud(w, fps);
     if (w.state === 'dead') this.drawGameOver(w);
+    else if (w.state === 'won') this.drawVictory(w);
+  }
+
+  /**
+   * The finish line: a chequered band across the lane, with an upright post at
+   * each edge. The band alone is only a few pixels deep at the distance it
+   * first comes into view — the posts are what makes the line readable early
+   * enough to be worth pacing yourself against.
+   *
+   * Drawn after the crowds on purpose: it is the one piece of the world the
+   * player has to be able to see through a wall of red.
+   */
+  private drawFinish(w: World): void {
+    if (!Number.isFinite(w.finishY)) return;
+    const proj = this.projector;
+    const dz = proj.dz(w.finishY);
+    if (dz < NEAR || dz > FAR_DZ) return;
+    const ctx = this.ctx;
+    // `project` returns a single reused object, so every corner is read out
+    // into scalars before the next call overwrites it.
+    const near = proj.project(0, w.finishY);
+    const nearLX = near.x;
+    const nearLY = near.y;
+    const nearScale = near.scale;
+    const nearRight = proj.project(LANE_W, w.finishY);
+    const nearRX = nearRight.x;
+    const nearRY = nearRight.y;
+    const far = proj.project(0, w.finishY + FINISH_DEPTH);
+    const farLX = far.x;
+    const farLY = far.y;
+    const farRight = proj.project(LANE_W, w.finishY + FINISH_DEPTH);
+    const farRX = farRight.x;
+    const farRY = farRight.y;
+
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    const squares = 10;
+    for (let i = 0; i < squares; i++) {
+      const t0 = i / squares;
+      const t1 = (i + 1) / squares;
+      ctx.fillStyle = i % 2 === 0 ? COL_FINISH : '#1b1b26';
+      ctx.beginPath();
+      ctx.moveTo(nearLX + (nearRX - nearLX) * t0, nearLY + (nearRY - nearLY) * t0);
+      ctx.lineTo(nearLX + (nearRX - nearLX) * t1, nearLY + (nearRY - nearLY) * t1);
+      ctx.lineTo(farLX + (farRX - farLX) * t1, farLY + (farRY - farLY) * t1);
+      ctx.lineTo(farLX + (farRX - farLX) * t0, farLY + (farRY - farLY) * t0);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Posts at the lane edges rather than a banner across it: the squad steers
+    // by what it can see ahead, and a gantry over the middle of the lane would
+    // hide the last stretch of swarm at exactly the wrong moment.
+    ctx.fillStyle = COL_WIN;
+    const postW = Math.max(1, FINISH_POST_W * nearScale);
+    const postTop = proj.raise(nearLY, FINISH_POST_H, nearScale);
+    ctx.fillRect(nearLX - postW / 2, postTop, postW, nearLY - postTop);
+    ctx.fillRect(nearRX - postW / 2, postTop, postW, nearRY - postTop);
+    ctx.restore();
   }
 
   /** Backdrop above the horizon: a quiet gradient plus a faint glow at the vanishing line. */
@@ -528,14 +597,32 @@ export class Renderer {
     ctx.fillText(WEAPONS[w.weaponTier].name, pad, pad + 72 * s);
 
     ctx.textAlign = 'right';
-    ctx.fillText(`${w.kills} KILLS`, this.canvas.width - pad, pad);
+    ctx.fillText(w.level.name, this.canvas.width - pad, pad);
     ctx.fillStyle = '#454b59';
     ctx.font = `500 ${Math.round(20 * s)}px system-ui, -apple-system, sans-serif`;
     ctx.fillText(
-      `${fps.toFixed(0)}fps  ${w.redCount}r ${w.bulletCount}b`,
+      `${w.kills} KILLS  ·  ${fps.toFixed(0)}fps`,
       this.canvas.width - pad,
       pad + 34 * s,
     );
+    this.drawProgress(w, pad, s);
+  }
+
+  /**
+   * Distance to the finish line, as a bar. A level is a fixed length, so the
+   * player needs to know whether to spend the squad now or hold it — without
+   * that the last thirty seconds feel identical to the first.
+   */
+  private drawProgress(w: World, pad: number, s: number): void {
+    if (!Number.isFinite(w.finishY)) return;
+    const ctx = this.ctx;
+    const barW = this.canvas.width - pad * 2;
+    const barH = 8 * s;
+    const y = pad + 150 * s;
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    ctx.fillRect(pad, y, barW, barH);
+    ctx.fillStyle = COL_WIN;
+    ctx.fillRect(pad, y, barW * w.progress, barH);
   }
 
   private drawGameOver(w: World): void {
@@ -557,7 +644,136 @@ export class Renderer {
     ctx.fillStyle = '#7c8394';
     ctx.font = `500 ${Math.round(28 * s)}px system-ui, -apple-system, sans-serif`;
     ctx.fillText('TAP TO RETRY', cx, cy + 90 * s);
+    this.drawMenuButton();
   }
+
+  private drawVictory(w: World): void {
+    const ctx = this.ctx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const s = this.canvas.width / LANE_W;
+    ctx.fillStyle = 'rgba(8,8,12,0.82)';
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const cx = this.canvas.width / 2;
+    const cy = this.canvas.height / 2;
+    ctx.fillStyle = COL_WIN;
+    ctx.font = `bold ${Math.round(80 * s)}px system-ui, -apple-system, sans-serif`;
+    ctx.fillText('CLEARED', cx, cy - 70 * s);
+    ctx.fillStyle = '#c9cedb';
+    ctx.font = `600 ${Math.round(34 * s)}px system-ui, -apple-system, sans-serif`;
+    ctx.fillText(`${w.level.name}  ·  ${w.count} survived`, cx, cy + 20 * s);
+    ctx.fillStyle = '#7c8394';
+    ctx.font = `500 ${Math.round(28 * s)}px system-ui, -apple-system, sans-serif`;
+    ctx.fillText('TAP TO CONTINUE', cx, cy + 90 * s);
+    this.drawMenuButton();
+  }
+
+  /** Shared by both end-of-run overlays, from the same rect the tap tests against. */
+  private drawMenuButton(): void {
+    const ctx = this.ctx;
+    const r = menuButton(this.canvas.width, this.canvas.height);
+    const s = this.canvas.width / LANE_W;
+    // Opaque enough to read against a crowd of four hundred stickmen.
+    ctx.fillStyle = 'rgba(20,20,28,0.88)';
+    roundRect(ctx, r, r.h * 0.35);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = Math.max(1, s * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#9aa1b3';
+    ctx.font = `600 ${Math.round(26 * s)}px system-ui, -apple-system, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('LEVELS', r.x + r.w / 2, r.y + r.h / 2);
+  }
+
+  /** True if a tap at these device-pixel coordinates hit the overlay's MENU pill. */
+  menuButtonHit(x: number, y: number): boolean {
+    return hitRect(menuButton(this.canvas.width, this.canvas.height), x, y);
+  }
+
+  /**
+   * Builds the level-select layout against the live backing-store size. The
+   * renderer owns it because it owns the canvas: a caller that guessed at the
+   * dimensions would draw tiles where taps do not land.
+   */
+  menuLayout(
+    levels: readonly LevelDef[],
+    isUnlocked: (level: LevelDef) => boolean,
+    isCleared: (level: LevelDef) => boolean,
+  ): MenuLayout {
+    return layoutMenu(levels, this.canvas.width, this.canvas.height, isUnlocked, isCleared);
+  }
+
+  /**
+   * The level select. Drawn in flat screen space with no world behind it, so it
+   * shares nothing with `draw` beyond the canvas itself.
+   */
+  drawMenu(layout: MenuLayout): void {
+    const ctx = this.ctx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const s = this.canvas.width / LANE_W;
+    const g = ctx.createLinearGradient(0, 0, 0, this.canvas.height);
+    g.addColorStop(0, COL_SKY_TOP);
+    g.addColorStop(1, '#141420');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = COL_RED;
+    ctx.font = `bold ${Math.round(72 * s)}px system-ui, -apple-system, sans-serif`;
+    ctx.fillText('RED TIDE', this.canvas.width / 2, layout.titleY);
+    ctx.fillStyle = '#7c8394';
+    ctx.font = `600 ${Math.round(24 * s)}px system-ui, -apple-system, sans-serif`;
+    ctx.fillText('SELECT A LEVEL', this.canvas.width / 2, layout.titleY + 52 * s);
+
+    for (const tile of layout.tiles) {
+      const cx = tile.x + tile.w / 2;
+      ctx.fillStyle = tile.unlocked
+        ? (tile.cleared ? 'rgba(67,217,163,0.14)' : 'rgba(77,163,255,0.14)')
+        : COL_LOCKED;
+      roundRect(ctx, tile, tile.h * 0.16);
+      ctx.fill();
+      ctx.strokeStyle = tile.cleared ? COL_WIN : tile.unlocked ? COL_BLUE : '#33333f';
+      ctx.lineWidth = 2 * s;
+      roundRect(ctx, tile, tile.h * 0.16);
+      ctx.stroke();
+
+      if (!tile.unlocked) {
+        // Still shows its number: a locked tile the player can identify is a
+        // signpost, where a blank one is just an absence.
+        ctx.fillStyle = '#41414f';
+        ctx.font = `bold ${Math.round(48 * s)}px system-ui, -apple-system, sans-serif`;
+        ctx.fillText(String(tile.level.id), cx, tile.y + tile.h / 2);
+        continue;
+      }
+      ctx.fillStyle = tile.cleared ? COL_WIN : COL_BLUE;
+      ctx.font = `bold ${Math.round(48 * s)}px system-ui, -apple-system, sans-serif`;
+      ctx.fillText(String(tile.level.id), cx, tile.y + tile.h * 0.40);
+      ctx.fillStyle = '#7c8394';
+      fitText(
+        ctx,
+        tile.level.name,
+        cx,
+        tile.y + tile.h * 0.74,
+        tile.w * 0.88,
+        tile.h * 0.22,
+        Math.round(19 * s),
+      );
+    }
+  }
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, r: Rect, radius: number): void {
+  ctx.beginPath();
+  ctx.moveTo(r.x + radius, r.y);
+  ctx.arcTo(r.x + r.w, r.y, r.x + r.w, r.y + r.h, radius);
+  ctx.arcTo(r.x + r.w, r.y + r.h, r.x, r.y + r.h, radius);
+  ctx.arcTo(r.x, r.y + r.h, r.x, r.y, radius);
+  ctx.arcTo(r.x, r.y, r.x + r.w, r.y, radius);
+  ctx.closePath();
 }
 
 /**

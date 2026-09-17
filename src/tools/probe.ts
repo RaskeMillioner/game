@@ -6,9 +6,11 @@
  *   npx esbuild src/tools/probe.ts --bundle --platform=node --format=esm \
  *     --outfile=.probe.mjs && node .probe.mjs
  */
-import { LANE_W } from '../sim/config.js';
+import { CAMPAIGN } from '../sim/campaign.js';
+import { LANE_W, SCROLL_SPEED } from '../sim/config.js';
 import { ENEMIES, ENEMY_KINDS } from '../sim/enemies.js';
 import { gateIsGood, GATE_PANEL_W } from '../sim/gates.js';
+import { endlessLevel, LevelDef } from '../sim/levels.js';
 import { World } from '../sim/world.js';
 
 const VIEW_H = 1560;
@@ -64,16 +66,25 @@ const strategies: Record<string, Strategy> = {
 };
 
 interface Result {
-  seconds: number; kills: number; peak: number; died: boolean;
+  seconds: number; kills: number; peak: number; died: boolean; won: boolean;
   broken: number; passed: number; leak: number;
   leaksByType: number[]; killsByType: number[]; contactsByType: number[];
 }
 
 function runOne(strategy: Strategy, seed: number): Result {
-  const w = new World(seed, VIEW_H);
+  return runLevel(strategy, endlessLevel(seed));
+}
+
+function runLevel(strategy: Strategy, level: LevelDef): Result {
+  const w = new World(level, VIEW_H);
   let peak = w.count;
   let t = 0;
-  const steps = MAX_SECONDS * 60;
+  // A finite level can take longer than the endless cap, so the budget follows
+  // the level's own length rather than a constant that quietly fails long ones.
+  const budget = Number.isFinite(level.length)
+    ? (level.length / SCROLL_SPEED) * 1.35 + 10
+    : MAX_SECONDS;
+  const steps = Math.ceil(budget * 60);
   for (let i = 0; i < steps; i++) {
     strategy(w, t);
     w.step(DT);
@@ -83,7 +94,8 @@ function runOne(strategy: Strategy, seed: number): Result {
   }
   const seen = w.objectives.filter((o) => o.resolved);
   return {
-    seconds: t, kills: w.kills, peak, died: w.state === 'dead',
+    seconds: t, kills: w.kills, peak,
+    died: w.state === 'dead', won: w.state === 'won',
     broken: seen.filter((o) => o.broken).length,
     passed: seen.length,
     leak: w.kills + w.leaked > 0 ? w.leaked / (w.kills + w.leaked) : 0,
@@ -119,7 +131,7 @@ for (const [name, strategy] of Object.entries(strategies)) {
 let earlyDeaths = 0;
 const EARLY_RUNS = 300;
 for (let s = 0; s < EARLY_RUNS; s++) {
-  const w = new World(s * 104729 + 3, VIEW_H);
+  const w = new World(endlessLevel(s * 104729 + 3), VIEW_H);
   for (let i = 0; i < 15 * 60 && w.state === 'running'; i++) {
     w.targetX = LANE_W / 2;
     w.step(DT);
@@ -154,4 +166,68 @@ console.log('\ntype       shot   reached   broke through   blues lost   share');
       `${((lost[t] / lostAll) * 100).toFixed(0).padStart(7)}%`,
     );
   }
+}
+
+/**
+ * Campaign tuning. The endless columns above answer "how long does a good run
+ * last"; a campaign needs a different question answered — *is level 12 tuned?*
+ *
+ * Win rate is measured over seed variants of each level rather than over its
+ * one stored seed: the shipped level is deterministic, so a single run of it
+ * returns 0% or 100% and tells you nothing. What is being measured is whether
+ * the template and difficulty put the level in band; the stored seed is one
+ * draw from that band.
+ */
+/**
+ * The target is a ramp, not a constant. A first level that kills half the
+ * players who reach it is a broken first level however well it sits inside a
+ * 45-70% band; the band is where the campaign is meant to *end up*, and the
+ * opening is meant to be winnable while you are still learning the controls.
+ */
+const WIN_FIRST = 0.95;
+const WIN_LAST = 0.50;
+const WIN_TOLERANCE = 0.12;
+const LEVEL_SEEDS = 40;
+
+function targetWin(index: number, total: number): number {
+  return total < 2 ? WIN_LAST : WIN_FIRST + (WIN_LAST - WIN_FIRST) * (index / (total - 1));
+}
+
+console.log('\nlevel                  template     diff   len   win%  target   mean(s)  peak   leak%   flag');
+const curve: number[] = [];
+for (const [index, level] of CAMPAIGN.entries()) {
+  const results: Result[] = [];
+  for (let i = 0; i < LEVEL_SEEDS; i++) {
+    results.push(runLevel(strategies['obj-light'] as Strategy, { ...level, seed: (level.seed + i * 2654435761) >>> 0 }));
+  }
+  const win = results.filter((r) => r.won).length / results.length;
+  curve.push(win);
+  const target = targetWin(index, CAMPAIGN.length);
+  const flag = win < target - WIN_TOLERANCE ? 'HARD' : win > target + WIN_TOLERANCE ? 'EASY' : '';
+  console.log(
+    `${String(level.id).padStart(2)} ${level.name.padEnd(16)} ${level.template.padEnd(12)}` +
+    ` ${level.difficulty.toFixed(2)} ${String(level.length / 1000).padStart(5)}` +
+    ` ${(win * 100).toFixed(0).padStart(5)}% ${(target * 100).toFixed(0).padStart(6)}%` +
+    ` ${avg(results, (r) => r.seconds).toFixed(1).padStart(8)}` +
+    ` ${avg(results, (r) => r.peak).toFixed(0).padStart(6)} ${(avg(results, (r) => r.leak) * 100).toFixed(1).padStart(6)}%` +
+    `   ${flag}`,
+  );
+}
+
+// The ramp as a shape rather than a list of assertions: a campaign that dips in
+// the middle is a tuning bug you cannot see one level at a time.
+console.log(`\ndifficulty curve (win rate; | marks this level's target window)`);
+for (let i = 0; i < curve.length; i++) {
+  const win = curve[i] as number;
+  const target = targetWin(i, curve.length);
+  const cells = Math.round(win * 40);
+  const low = Math.round((target - WIN_TOLERANCE) * 40);
+  const high = Math.round((target + WIN_TOLERANCE) * 40);
+  let bar = '';
+  for (let c = 0; c < 40; c++) {
+    if (c < cells) bar += '#';
+    else if (c === low || c === high) bar += '|';
+    else bar += ' ';
+  }
+  console.log(`${String(CAMPAIGN[i]?.id).padStart(2)} |${bar}| ${(win * 100).toFixed(0).padStart(3)}%`);
 }

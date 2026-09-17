@@ -4,12 +4,13 @@ import {
   BRUTE, ENEMIES, ENEMY_KINDS, enemyHp, GRUNT, pickType, RUNNER,
 } from './enemies.js';
 import { gateIsGood, GATE_PANEL_W } from './gates.js';
+import { endlessLevel } from './levels.js';
 import { World } from './world.js';
 
 const VIEW_H = 1560;
 
 function run(seed: number, steps: number, drive?: (w: World, i: number) => void): World {
-  const w = new World(seed, VIEW_H);
+  const w = new World(endlessLevel(seed), VIEW_H);
   for (let i = 0; i < steps && w.state === 'running'; i++) {
     drive?.(w, i);
     w.step(1 / 60);
@@ -89,7 +90,7 @@ describe('World', () => {
   function meanPeak(strategy: (w: World) => void, seeds: number): number {
     let total = 0;
     for (let s = 0; s < seeds; s++) {
-      const w = new World(s * 7919 + 13, VIEW_H);
+      const w = new World(endlessLevel(s * 7919 + 13), VIEW_H);
       let peak = w.count;
       for (let i = 0; i < 60 * 75 && w.state === 'running'; i++) {
         strategy(w);
@@ -115,7 +116,7 @@ describe('World', () => {
   function meanSurvival(strategy: (w: World) => void, seeds: number): number {
     let total = 0;
     for (let s = 0; s < seeds; s++) {
-      const w = new World(s * 7919 + 13, VIEW_H);
+      const w = new World(endlessLevel(s * 7919 + 13), VIEW_H);
       let i = 0;
       for (; i < 60 * 75 && w.state === 'running'; i++) {
         strategy(w);
@@ -166,7 +167,7 @@ describe('World', () => {
   }, 30_000);
 
   it('grows past the render cap while the true count keeps scaling damage', () => {
-    const w = new World(42, VIEW_H);
+    const w = new World(endlessLevel(42), VIEW_H);
     w.count = 2000;
     w.step(1 / 60);
     expect(w.rendered).toBe(MAX_BLUE_RENDER);
@@ -211,7 +212,7 @@ describe('red pursuit', () => {
   });
 
   it('closes on a squad parked far from the spawn column', () => {
-    const w = new World(4, VIEW_H);
+    const w = new World(endlessLevel(4), VIEW_H);
     w.targetX = 60;
     w.anchorX = 60;
     for (let i = 0; i < 90; i++) w.step(1 / 60);
@@ -226,7 +227,7 @@ describe('red pursuit', () => {
 
 describe('objectives', () => {
   it('breaks under sustained fire and pays out', () => {
-    const w = new World(11, VIEW_H);
+    const w = new World(endlessLevel(11), VIEW_H);
     w.count = 260;
     const target = w.objectives.find((o) => o.kind === 'recruit');
     expect(target).toBeDefined();
@@ -242,7 +243,7 @@ describe('objectives', () => {
   });
 
   it('leaves objectives intact when the squad never lines up on them', () => {
-    const w = new World(11, VIEW_H);
+    const w = new World(endlessLevel(11), VIEW_H);
     w.count = 260;
     const board = w.objectives.find((o) => o.kind === 'weapon');
     expect(board).toBeDefined();
@@ -274,7 +275,7 @@ describe('enemy types', () => {
   it('introduces every archetype over the course of a run', () => {
     const seen = new Set<number>();
     for (let s = 0; s < 8 && seen.size < ENEMY_KINDS; s++) {
-      const w = new World(s * 31 + 5, VIEW_H);
+      const w = new World(endlessLevel(s * 31 + 5), VIEW_H);
       for (let i = 0; i < 60 * 90 && w.state === 'running'; i++) {
         seekObjectives(900)(w);
         w.step(1 / 60);
@@ -312,7 +313,7 @@ describe('enemy types', () => {
   });
 
   it('spends a bullet as a damage pool rather than one kill per pierce', () => {
-    const w = new World(9, VIEW_H);
+    const w = new World(endlessLevel(9), VIEW_H);
     w.count = 400;
     // Step once so anchorY is real: placing the brute relative to an unstepped
     // world drops it inside the crowd's own radius, where it contacts instantly.
@@ -342,7 +343,7 @@ describe('enemy types', () => {
 describe('weapon pickups', () => {
   /** Runs until the squad passes `o`, holding a fixed lane position. */
   function passAt(seed: number, holdX: (o: { x: number }) => number) {
-    const w = new World(seed, VIEW_H);
+    const w = new World(endlessLevel(seed), VIEW_H);
     w.count = 500;
     // Not the first crate: it sits ~0.6s into the run, before a single volley
     // has landed, so it would test spawn timing rather than the pickup rule.
@@ -373,7 +374,7 @@ describe('weapon pickups', () => {
   });
 
   it('gives nothing for running over a crate that was never broken', () => {
-    const w = new World(11, VIEW_H);
+    const w = new World(endlessLevel(11), VIEW_H);
     // Too few blues to crack it open before it is reached.
     w.count = 3;
     const crate = w.objectives.find((o) => o.kind === 'weapon' && o.y > 2500);
@@ -404,7 +405,7 @@ describe('weapon tiers', () => {
       // 75s and eight seeds: a shorter window leaves counts in the tens, where
       // the gap between adjacent tiers is inside the noise.
       for (let seed = 0; seed < 8; seed++) {
-        const w = new World(seed * 7919 + 13, VIEW_H);
+        const w = new World(endlessLevel(seed * 7919 + 13), VIEW_H);
         for (let i = 0; i < 75 * 60 && w.state === 'running'; i++) {
           w.weaponTier = tier;
           seekObjectives(900)(w);

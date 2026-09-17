@@ -12,6 +12,7 @@
  */
 import { LANE_W, WEAPONS } from '../sim/config.js';
 import { GRUNT } from '../sim/enemies.js';
+import { endlessLevel } from '../sim/levels.js';
 import { World } from '../sim/world.js';
 
 const VIEW_H = 1560;
@@ -33,7 +34,7 @@ function measure(tier: number, count: number, seeds: number, hp = FULL_HP): Resu
   let touched = 0;
   let kills = 0;
   for (let s = 0; s < seeds; s++) {
-    const w = new World(s * 5449 + 7, VIEW_H);
+    const w = new World(endlessLevel(s * 5449 + 7), VIEW_H);
     w.count = count;
     w.step(DT);
     const hitCols = new Set<number>();

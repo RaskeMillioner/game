@@ -6,18 +6,19 @@ import {
   RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
   START_BLUE, WEAPONS,
 } from './config.js';
-import {
-  ENEMIES, ENEMY_KINDS, enemyHp, mixAt, pickType,
-} from './enemies.js';
+import { ENEMIES, ENEMY_KINDS } from './enemies.js';
 import { formationRadius, slotLag, slotX, slotY } from './formation.js';
-import { applyGate, buildGates, Gate, gateHit } from './gates.js';
+import { applyGate, Gate, gateHit } from './gates.js';
+import { buildLevel, LevelDef, SpawnWave } from './levels.js';
 import {
-  buildObjectives, collectObjective, damageObjective, Objective, OBJECTIVE_H, OBJECTIVE_W,
-  PICKUP_PAD,
+  collectObjective, damageObjective, Objective, OBJECTIVE_H, OBJECTIVE_W, PICKUP_PAD,
 } from './objectives.js';
-import { Director } from './swarm.js';
 
-export type RunState = 'running' | 'dead';
+/**
+ * `won` is reached by crossing the level's finish line, `dead` by losing the
+ * squad. An endless level has no finish line and can only end the second way.
+ */
+export type RunState = 'running' | 'dead' | 'won';
 
 /**
  * Authoritative game state. Deliberately free of any DOM or canvas reference so
@@ -25,6 +26,7 @@ export type RunState = 'running' | 'dead';
  * testable by running a level 500 times instead of guessing.
  */
 export class World {
+  readonly level: LevelDef;
   state: RunState = 'running';
   time = 0;
   cameraY = 0;
@@ -54,6 +56,8 @@ export class World {
   leaked = 0;
   gates: Gate[];
   objectives: Objective[];
+  /** World position of the finish line. Infinite on an endless level. */
+  readonly finishY: number;
   /** Set for one frame when a gate fires, so the renderer can punch it up. */
   gateFlash = 0;
 
@@ -85,22 +89,29 @@ export class World {
   readonly corpseRed = new Uint8Array(MAX_CORPSE);
 
   private readonly rng: Rng;
-  private readonly director = new Director();
+  /** The level's spawn script, in ascending release order. */
+  private readonly waves: readonly SpawnWave[];
+  private waveIndex = 0;
   private readonly grid = new Grid(56, MAX_RED);
   private readonly hits = new Int32Array(256);
   private readonly redDead = new Uint8Array(MAX_RED);
-  private readonly mix = new Float32Array(ENEMY_KINDS);
   /** Frontmost slot in each lateral column of the formation — the firing line. */
   private readonly lineSlot = new Int32Array(MAX_EMITTERS);
   private readonly lineFront = new Float32Array(MAX_EMITTERS);
   private fireTimer = 0;
   private squadSettled = false;
 
-  constructor(seed: number, viewH: number) {
-    this.rng = new Rng(seed);
+  constructor(level: LevelDef, viewH: number) {
+    this.level = level;
+    // The sim's own stream is seeded apart from the level generator's, so
+    // spawn jitter and level content never perturb one another.
+    this.rng = new Rng((level.seed * 2 + 1) >>> 0);
     this.viewH = viewH;
-    this.gates = buildGates(this.rng, 14);
-    this.objectives = buildObjectives(this.rng, 20, this.gates.map((g) => g.y));
+    const plan = buildLevel(level);
+    this.waves = plan.waves;
+    this.gates = plan.gates;
+    this.objectives = plan.objectives;
+    this.finishY = plan.finishY;
     this.corpseAge.fill(CORPSE_LIFE);
     this.resize(viewH);
   }
@@ -115,6 +126,12 @@ export class World {
 
   get distance(): number {
     return this.cameraY;
+  }
+
+  /** How far through the level the squad is, 0..1. Always 0 with no finish line. */
+  get progress(): number {
+    if (!Number.isFinite(this.finishY) || this.finishY <= 0) return 0;
+    return Math.min(1, this.anchorY / this.finishY);
   }
 
   resize(viewH: number): void {
@@ -133,7 +150,7 @@ export class World {
     this.stepAnchor(dt);
     this.stepSquad(dt);
     this.stepGates();
-    this.spawnReds(dt);
+    this.spawnReds();
     this.stepReds(dt);
     this.stepFiring(dt);
     this.stepBullets(dt);
@@ -147,7 +164,10 @@ export class World {
     if (this.count <= 0) {
       this.count = 0;
       this.state = 'dead';
+      return;
     }
+    // Checked after attrition: a squad wiped out on the line did not make it.
+    if (this.anchorY >= this.finishY) this.state = 'won';
   }
 
   private stepAnchor(dt: number): void {
@@ -204,21 +224,29 @@ export class World {
     }
   }
 
-  private spawnReds(dt: number): void {
-    const n = this.director.step(dt, this.distance, this.rng);
+  /**
+   * Releases every wave the squad has now reached. Pacing is authored in the
+   * level's event list rather than computed here: the sim decides where reds
+   * go, never how many arrive or when.
+   */
+  private spawnReds(): void {
+    const waves = this.waves;
+    while (this.waveIndex < waves.length && waves[this.waveIndex].y <= this.cameraY) {
+      this.spawnWave(waves[this.waveIndex++]);
+    }
+  }
+
+  private spawnWave(wave: SpawnWave): void {
     const spawnY = this.cameraY + this.viewH + 60;
-    for (let i = 0; i < n && this.redCount < MAX_RED; i++) {
+    const stats = ENEMIES[wave.type];
+    const frontage = Math.min(
+      RED_SPAWN_SPREAD,
+      Math.max(RED_SPAWN_MIN_SPREAD, this.radius * RED_SPAWN_RADIUS_GAIN + 70),
+    ) * wave.spread;
+    for (let i = 0; i < wave.count && this.redCount < MAX_RED; i++) {
       const j = this.redCount++;
-      const km = this.distance / 1000;
-      mixAt(km, this.mix);
-      const type = pickType(this.mix, this.rng.next());
-      const stats = ENEMIES[type];
-      this.redType[j] = type;
-      this.redHp[j] = enemyHp(type, km);
-      const frontage = Math.min(
-        RED_SPAWN_SPREAD,
-        Math.max(RED_SPAWN_MIN_SPREAD, this.radius * RED_SPAWN_RADIUS_GAIN + 70),
-      );
+      this.redType[j] = wave.type;
+      this.redHp[j] = wave.hp;
       const bias = this.anchorX + this.rng.range(-frontage, frontage);
       this.redX[j] = bias < 25 ? 25 : bias > LANE_W - 25 ? LANE_W - 25 : bias;
       this.redY[j] = spawnY + this.rng.range(0, 220);
