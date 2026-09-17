@@ -3,11 +3,12 @@ import { Rng } from '../core/rng.js';
 import {
   ANCHOR_FOLLOW, BLUE_FOLLOW, BREAKTHROUGH_PAD, BULLET_RADIUS, BULLET_RANGE, CONTACT_PAD, CORPSE_LIFE,
   FIRE_COLUMN_FILL, FIRE_FAN_REF, LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
-  RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
+  RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_EDGE_PAD, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
   START_BLUE, WEAPONS,
 } from './config.js';
 import { ENEMIES, ENEMY_KINDS } from './enemies.js';
-import { formationRadius, slotLag, slotX, slotY } from './formation.js';
+import { clampToCorridor, Corridor, centreAt, halfWidthAt } from './corridor.js';
+import { formationRadius, formationSqueeze, slotLag, slotX, slotY } from './formation.js';
 import { applyGate, Gate, gateHit } from './gates.js';
 import { buildLevel, LevelDef, SpawnWave } from './levels.js';
 import {
@@ -58,6 +59,8 @@ export class World {
   objectives: Objective[];
   /** World position of the finish line. Infinite on an endless level. */
   readonly finishY: number;
+  /** The drivable lane. Steering, spawning and the renderer all read it. */
+  readonly corridor: Corridor;
   /** Set for one frame when a gate fires, so the renderer can punch it up. */
   gateFlash = 0;
 
@@ -112,6 +115,9 @@ export class World {
     this.gates = plan.gates;
     this.objectives = plan.objectives;
     this.finishY = plan.finishY;
+    this.corridor = plan.corridor;
+    this.anchorX = centreAt(this.corridor, this.anchorY);
+    this.targetX = this.anchorX;
     this.corpseAge.fill(CORPSE_LIFE);
     this.resize(viewH);
   }
@@ -120,8 +126,26 @@ export class World {
     return Math.min(this.count, MAX_BLUE_RENDER);
   }
 
-  get radius(): number {
-    return formationRadius(this.rendered);
+  /**
+   * How hard the crowd is currently squeezed by the corridor. 1 in open lane,
+   * so everything derived from it is unchanged on a straight level.
+   */
+  get squeeze(): number {
+    return formationSqueeze(this.rendered, halfWidthAt(this.corridor, this.anchorY));
+  }
+
+  /**
+   * The crowd is a disc in open lane and an ellipse in a narrow one, so its
+   * half-width and half-depth are separate quantities. Lateral things — the
+   * firing line, the swarm's frontage, pickup overlap — read `radiusX`; depth
+   * things — how far a red must get to have broken through — read `radiusY`.
+   */
+  get radiusX(): number {
+    return formationRadius(this.rendered) * this.squeeze;
+  }
+
+  get radiusY(): number {
+    return formationRadius(this.rendered) / this.squeeze;
   }
 
   get distance(): number {
@@ -171,12 +195,16 @@ export class World {
   }
 
   private stepAnchor(dt: number): void {
-    // Keep almost the whole crowd inside the lane. At 0.55 the formation's outer
-    // ranks hung off the edge of the screen, which in perspective reads as units
-    // vanishing into nothing.
-    const margin = Math.min(this.radius * 0.9, LANE_W * 0.36);
-    if (this.targetX < margin) this.targetX = margin;
-    else if (this.targetX > LANE_W - margin) this.targetX = LANE_W - margin;
+    // Keep almost the whole crowd inside the corridor. At 0.55 the formation's
+    // outer ranks hung off the edge of the screen, which in perspective reads as
+    // units vanishing into nothing.
+    //
+    // On a full-width lane the margin cap works out to LANE_W * 0.36 exactly as
+    // it did before the corridor existed, which is what makes a straight level
+    // bit-identical to the pre-corridor sim.
+    const half = halfWidthAt(this.corridor, this.anchorY);
+    const margin = Math.min(this.radiusX * 0.9, half * 0.72);
+    this.targetX = clampToCorridor(this.corridor, this.anchorY, this.targetX, margin);
     const k = 1 - Math.exp(-dt * ANCHOR_FOLLOW);
     this.anchorX += (this.targetX - this.anchorX) * k;
   }
@@ -185,27 +213,32 @@ export class World {
     const n = this.rendered;
     const ax = this.anchorX;
     const ay = this.anchorY;
+    // Squeezed laterally and stretched lengthwise, so the crowd keeps its area
+    // and every one of its bodies while fitting through a narrower gap.
+    const sx = this.squeeze;
+    const sy = 1 / sx;
     if (!this.squadSettled) {
       for (let i = 0; i < n; i++) {
-        this.blueX[i] = ax + slotX[i];
-        this.blueY[i] = ay + slotY[i];
+        this.blueX[i] = ax + slotX[i] * sx;
+        this.blueY[i] = ay + slotY[i] * sy;
       }
       this.squadSettled = true;
       return;
     }
     for (let i = 0; i < n; i++) {
       const k = 1 - Math.exp(-dt * BLUE_FOLLOW * slotLag[i]);
-      this.blueX[i] += (ax + slotX[i] - this.blueX[i]) * k;
-      this.blueY[i] += (ay + slotY[i] - this.blueY[i]) * k;
+      this.blueX[i] += (ax + slotX[i] * sx - this.blueX[i]) * k;
+      this.blueY[i] += (ay + slotY[i] * sy - this.blueY[i]) * k;
     }
   }
 
   /** Newly recruited units appear at the anchor and flow outward to their slot. */
   private seedNewSlots(previous: number): void {
     const n = this.rendered;
+    const sx = this.squeeze;
     for (let i = Math.min(previous, MAX_BLUE_RENDER); i < n; i++) {
-      this.blueX[i] = this.anchorX + slotX[i] * 0.2;
-      this.blueY[i] = this.anchorY + slotY[i] * 0.2;
+      this.blueX[i] = this.anchorX + slotX[i] * sx * 0.2;
+      this.blueY[i] = this.anchorY + slotY[i] * (1 / sx) * 0.2;
     }
   }
 
@@ -241,15 +274,18 @@ export class World {
     const stats = ENEMIES[wave.type];
     const frontage = Math.min(
       RED_SPAWN_SPREAD,
-      Math.max(RED_SPAWN_MIN_SPREAD, this.radius * RED_SPAWN_RADIUS_GAIN + 70),
+      Math.max(RED_SPAWN_MIN_SPREAD, this.radiusX * RED_SPAWN_RADIUS_GAIN + 70),
     ) * wave.spread;
     for (let i = 0; i < wave.count && this.redCount < MAX_RED; i++) {
       const j = this.redCount++;
       this.redType[j] = wave.type;
       this.redHp[j] = wave.hp;
       const bias = this.anchorX + this.rng.range(-frontage, frontage);
-      this.redX[j] = bias < 25 ? 25 : bias > LANE_W - 25 ? LANE_W - 25 : bias;
-      this.redY[j] = spawnY + this.rng.range(0, 220);
+      const y = spawnY + this.rng.range(0, 220);
+      // Into the corridor as it is where they appear, not as it is under the
+      // squad: a wave released before a bend must arrive inside the bend.
+      this.redX[j] = clampToCorridor(this.corridor, y, bias, RED_SPAWN_EDGE_PAD);
+      this.redY[j] = y;
       this.redSpeed[j] = this.rng.range(stats.speedMin, stats.speedMax);
       this.redOff[j] = this.rng.range(-1, 1);
     }
@@ -265,9 +301,11 @@ export class World {
     const cullY = this.cameraY - 160;
     const ax = this.anchorX;
     const ay = this.anchorY;
-    const spread = this.radius * 0.7 + 26;
+    const spread = this.radiusX * 0.7 + 26;
     // Anything that gets behind the crowd has broken through the firing line.
-    const breachY = ay - this.radius - BREAKTHROUGH_PAD;
+    // Depth, not width: a crowd squeezed into a narrow lane is correspondingly
+    // deeper, and correspondingly harder to get past.
+    const breachY = ay - this.radiusY - BREAKTHROUGH_PAD;
     for (let i = 0; i < this.redCount; i++) {
       const tx = ax + this.redOff[i] * spread;
       const dy = ay - this.redY[i];
@@ -282,6 +320,9 @@ export class World {
       const step = this.redSpeed[i] * dt;
       this.redX[i] += (dx / d) * step;
       this.redY[i] += (dy / d) * step;
+      // Reds keep to the drivable lane too, so a bend never has the swarm
+      // running through ground the renderer does not draw.
+      this.redX[i] = clampToCorridor(this.corridor, this.redY[i], this.redX[i], RED_SPAWN_EDGE_PAD);
       // A breakthrough is never free: it takes one blue down with it and dies
       // there, so every red you fail to shoot in front of you is a body lost.
       if (this.redY[i] < breachY || this.redY[i] < cullY) {
@@ -337,14 +378,14 @@ export class World {
    */
   private buildFiringLine(n: number): number {
     const cols = Math.min(n, MAX_EMITTERS);
-    const r = this.radius;
+    const r = this.radiusX;
     const span = r * 2 || 1;
     for (let c = 0; c < cols; c++) {
       this.lineSlot[c] = -1;
       this.lineFront[c] = -Infinity;
     }
     for (let i = 0; i < n; i++) {
-      let c = (((slotX[i] + r) / span) * cols) | 0;
+      let c = (((slotX[i] * this.squeeze + r) / span) * cols) | 0;
       if (c < 0) c = 0;
       else if (c >= cols) c = cols - 1;
       if (slotY[i] > this.lineFront[c]) {
@@ -373,7 +414,7 @@ export class World {
      * Spreading by angle buys the same coverage at the cost of accuracy: the
      * further a bullet travels, the further it has wandered from where it aimed.
      */
-    const jitter = ((this.radius * 2) / manned) * FIRE_COLUMN_FILL * 0.5;
+    const jitter = ((this.radiusX * 2) / manned) * FIRE_COLUMN_FILL * 0.5;
     // Damage scales with the TRUE count, not the drawn count, so growing past
     // the render cap still makes you stronger.
     const perBullet = Math.max(1, (this.count * w.power) / (manned * w.pellets));
@@ -517,7 +558,7 @@ export class World {
     for (const o of this.objectives) {
       if (o.resolved || this.anchorY < o.y) continue;
       const before = this.rendered;
-      const overlapped = Math.abs(this.anchorX - o.x) <= this.radius + PICKUP_PAD;
+      const overlapped = Math.abs(this.anchorX - o.x) <= this.radiusX + PICKUP_PAD;
       const result = collectObjective(o, this.count, this.weaponTier, overlapped);
       this.count = result.count;
       this.weaponTier = result.weaponTier;
@@ -533,12 +574,18 @@ export class World {
   private collideSquad(): void {
     const ax = this.anchorX;
     const ay = this.anchorY;
+    // Elliptical, because the crowd is: a squeezed formation is narrower to
+    // reach from the side and deeper to reach from the front.
+    const rx = this.radiusX;
+    const ry = this.radiusY;
     for (let i = 0; i < this.redCount; i++) {
       const type = this.redType[i];
-      const reach = this.radius + ENEMIES[type].radius + CONTACT_PAD;
+      const pad = ENEMIES[type].radius + CONTACT_PAD;
+      const ex = rx + pad;
+      const ey = ry + pad;
       const dx = this.redX[i] - ax;
       const dy = this.redY[i] - ay;
-      if (dx * dx + dy * dy > reach * reach) continue;
+      if ((dx * dx) / (ex * ex) + (dy * dy) / (ey * ey) > 1) continue;
       this.addCorpse(this.redX[i], this.redY[i], true);
       this.addCorpse(this.redX[i], this.redY[i], false);
       this.kills++;

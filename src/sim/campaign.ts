@@ -54,6 +54,10 @@ export const CAMPAIGN: readonly LevelDef[] = [
     length: 15000,
     mix: { [GRUNT]: 1, [RUNNER]: 0.35 },
     structures: DEFAULT_STRUCTURES,
+    // The level the template is named for: the lane closes to two-thirds
+    // through the middle, so the crowd is thinnest exactly where the tide
+    // thickens.
+    corridor: { shape: 'pinch', tightness: 0.46, at: 0.5, span: 0.26 },
   },
   {
     id: 5,
@@ -114,6 +118,9 @@ export const CAMPAIGN: readonly LevelDef[] = [
     length: 20000,
     mix: { [GRUNT]: 1, [RUNNER]: 0.4, [EXPLODER]: 0.09, [BRUTE]: 0.06 },
     structures: DEFAULT_STRUCTURES,
+    // Longer and tighter than THE PRESS, and it swings while it squeezes:
+    // the lane you are threading is also moving under you.
+    corridor: { shape: 'bend', tightness: 0.42, sway: 0.42, at: 0.52, span: 0.46 },
   },
   {
     id: 11,

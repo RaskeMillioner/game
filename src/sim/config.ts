@@ -54,6 +54,12 @@ export const RED_SPAWN_SPREAD = 340;
 export const RED_SPAWN_MIN_SPREAD = 95;
 export const RED_SPAWN_RADIUS_GAIN = 1.6;
 export const CONTACT_PAD = 6;
+/**
+ * How far clear of the corridor's edges reds are kept. Without it a wave
+ * clamped into a narrow lane stacks exactly on the boundary, which reads as a
+ * queue against an invisible wall rather than as a swarm.
+ */
+export const RED_SPAWN_EDGE_PAD = 25;
 
 export const MAX_BULLET = 1400;
 export const BULLET_RADIUS = 5;

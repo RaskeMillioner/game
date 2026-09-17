@@ -1,5 +1,6 @@
 import { Rng } from '../core/rng.js';
 import { GATE_FIRST, GATE_SPACING, SCROLL_SPEED } from './config.js';
+import { buildCorridor, Corridor, CorridorSpec, STRAIGHT } from './corridor.js';
 import {
   BRUTE, ENEMY_KINDS, EnemyType, EXPLODER, enemyHp, GRUNT, mixAt, pickType, RUNNER,
 } from './enemies.js';
@@ -68,6 +69,8 @@ export interface LevelDef {
   readonly length: number;
   readonly mix: EnemyMix;
   readonly structures: StructureSpec;
+  /** Lane shape. Omitted means a straight full-width lane. */
+  readonly corridor?: CorridorSpec;
 }
 
 /** Everything a `World` needs to run a level, generated once at construction. */
@@ -76,6 +79,7 @@ export interface LevelPlan {
   readonly gates: Gate[];
   readonly objectives: Objective[];
   readonly finishY: number;
+  readonly corridor: Corridor;
 }
 
 /**
@@ -174,9 +178,20 @@ const TEMPLATE_TABLE: Record<TemplateId, Template> = {
   },
 
   /**
-   * A pressure spike through the middle third. Phase 6 gives this one actual
-   * geometry — a lane that narrows — but the density is the half of it that the
-   * player feels first, and it stands on its own until then.
+   * A pressure spike through the middle third, which the corridor now gives a
+   * shape to travel through.
+   *
+   * The density is unchanged, and that is a finding rather than an oversight.
+   * Halving it on the assumption that a narrowed lane would supply the missing
+   * pressure made NARROWS markedly *easier* (48% -> 65% win rate), because
+   * compression cuts three ways and only one of them favours the swarm: the
+   * firing line narrows, but the crowd also gets deeper — so a red must run
+   * further to break through — and the swarm's own frontage is derived from the
+   * crowd's, so it arrives narrower and funnels into the guns. Net, a squeeze
+   * protects the player.
+   *
+   * So the corridor is navigational and visual variety, not a difficulty dial.
+   * Narrow sections get their teeth from hazards in phase 6b.
    */
   choke: {
     tide: 0.78,
@@ -321,7 +336,11 @@ export function buildLevel(def: LevelDef): LevelPlan {
     ? Math.floor((usable - s.objectiveFirst) / s.objectiveSpacing) + 1
     : 0;
 
-  const gates = buildGates(rng, gateCount, s.gateFirst, s.gateSpacing);
+  // Built before the structures, because where a gate or a crate can sit is a
+  // question about the lane at that point rather than about the lane's width.
+  const corridor = buildCorridor(def.corridor ?? STRAIGHT, horizon);
+
+  const gates = buildGates(rng, gateCount, s.gateFirst, s.gateSpacing, corridor);
   // Nudging an objective clear of a gate can push it past where it was meant to
   // sit, and anything past the line is content the player can never reach — or,
   // worse, a crate drawn on the far side of a finished level.
@@ -331,7 +350,8 @@ export function buildLevel(def: LevelDef): LevelPlan {
     gates.map((g) => g.y),
     s.objectiveFirst,
     s.objectiveSpacing,
+    corridor,
   ).filter((o) => o.y < usable);
 
-  return { waves, gates, objectives, finishY: def.length };
+  return { waves, gates, objectives, finishY: def.length, corridor };
 }

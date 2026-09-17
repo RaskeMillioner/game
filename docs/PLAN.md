@@ -8,7 +8,8 @@ Revised after the first playtests. The original plan described a top-down auto-r
 paired gates as the central decision; almost none of that survived contact with play, and
 this document describes what the game actually is and where it goes next.
 
-Phases 4 and 5 are built. The game is a twelve-level campaign, not one endless run.
+Phases 4, 5 and the corridor half of 6 are built. The game is a twelve-level campaign, not
+one endless run, and the lane has a shape.
 
 ## 1. Where the code is
 
@@ -27,9 +28,10 @@ Playable and deployed at `raskemillioner.github.io/game/`. 34 kB, 12 kB gzipped,
 | Levels | `LevelDef` + five templates generating a concrete spawn-event list from a stored seed |
 | Finish line and win state | Levels end at a line; `won` and `dead` are separate outcomes |
 | Campaign | Twelve levels, level select, next-level unlock persisted in `localStorage` |
+| Corridor | Lane shape over `worldY`: narrowing, pinches and bends; the crowd compresses to fit |
 | Balance harness | Headless seeded probe: strategy survival, per-type attribution, and per-level win rate against a target ramp; 48 tests |
 
-**Not built:** corridor shape, hazards, new structure kinds, bosses, audio, juice.
+**Not built:** hazards, new structure kinds, bosses, audio, juice.
 
 ## 2. Confirmed design criteria
 
@@ -64,8 +66,11 @@ Of the three things phase 4 named as hardcoded, two are now data:
    static per-type table, in phase 4.
 2. ~~**Waves are a formula.**~~ Built: `Director.rate()` is gone. A template generates a list
    of `SpawnWave`s and the sim only decides where reds go, never how many or when.
-3. **The lane is a constant.** `LANE_W = 720` is still baked into the sim, the clamp,
-   spawning and the renderer. Nothing can narrow, bend or fork. This is phase 6.
+3. ~~**The lane is a constant.**~~ Built: `LANE_W` is still the coordinate space, but the
+   *drivable span* within it is now sampled data the sim and the renderer both read.
+   Forks remain phase 10.
+
+All three are now data. What is left is content built on top of them.
 
 ### Enemy types — built
 
@@ -127,13 +132,47 @@ Two decisions worth writing down:
   time for its difficulty to mean anything. Difficulty comes from the enemies, not from
   handing later levels weaker gates.
 
-### Corridor
+### Corridor — built
 
-`LANE_W` stays fixed at 720 as the virtual coordinate space. Lane *shape* becomes a
-separate corridor function over `worldY` returning one or more drivable spans. The anchor
-clamp, red spawning and the renderer's ground edges all read the corridor instead of the
-constant. Narrowing and bends fall out of this directly; forks need the corridor to return
-a list of spans rather than one, which is the only genuinely awkward part.
+`LANE_W` stays fixed at 720 as the virtual coordinate space. The *drivable span* within it
+is sampled every 60 units into two `Float32Array`s — centre and half-width — baked at
+level generation exactly as spawn waves are. The anchor clamp, red spawning, gate and
+structure placement and the renderer's ground all read the corridor instead of the
+constant. Forks still need the accessors to return a list of spans rather than one, which
+remains the only genuinely awkward part, and stays in phase 10.
+
+A straight full-width corridor is a **strict no-op**, verified to the digit: the anchor
+clamp's cap works out to `LANE_W * 0.36` and structures land on `LANE_W * 0.22` / `0.78`
+exactly as before. That is what let ten of twelve levels keep their measured win rates
+unchanged while two gained geometry.
+
+**A narrow lane compresses the crowd; it never kills it.** `slotX` scales by
+`min(1, halfWidth / radius)` and `slotY` by its inverse, so area and every body are
+conserved, and `radius` splits into `radiusX` (firing line, swarm frontage, pickup
+overlap) and `radiusY` (breakthrough depth). Killing the overhang instead would make squad
+size a liability in narrow sections — the same argument that rules out a ranged enemy,
+wearing a different hat.
+
+**The corridor is not a difficulty dial, and that was a surprise.** Halving `choke`'s
+density spike on the assumption that a narrowed lane would supply the missing pressure
+made NARROWS markedly *easier* — 48% to 65%. Compression cuts three ways and only one
+favours the swarm:
+
+| Effect of a squeeze | Who it helps |
+|---|---|
+| Firing line narrows, covering less of the swarm | the swarm |
+| Crowd deepens, so a red must run further to break through | the player |
+| Swarm frontage derives from the crowd's, so it arrives narrower and funnels into the guns | the player |
+
+Net, a squeeze protects the player. The density spike was doing the work all along and has
+been restored. Lane shape is navigational and visual variety; narrow sections get their
+teeth from hazards.
+
+A second trap, found only by screenshotting it: the crowd's radius tops out at
+`formationRadius(MAX_BLUE_RENDER)` around 220 however large the squad truly is, so a pinch
+looser than a half-width of ~232 squeezes nothing at all. The first THE PRESS bottomed out
+at 231 and was pure scenery. `SQUEEZE_THRESHOLD` and a test now hold every shaped level
+below it.
 
 ## 4. Phases
 
@@ -141,14 +180,16 @@ a list of spans rather than one, which is the only genuinely awkward part.
 |---|---|---|---|
 | 4 | ~~Enemy types~~ | **Done.** Per-unit HP, damage-pool bullets, grunt/runner/brute/exploder, per-type batching | Me |
 | 5 | ~~Level system~~ | **Done.** `LevelDef`, template generators, finish line, win/lose, level select, campaign flow | Split |
-| 6 | Corridor + hazards | Corridor over worldY, narrowing and bends, static hazards that split the crowd | Me |
+| 6a | ~~Corridor~~ | **Done.** Corridor over worldY, narrowing, pinches and bends; crowd compression | Me |
+| 6b | Hazards | Static hazards that split the crowd — where narrow sections get their teeth | Me |
 | 7 | Structures | New objective kinds: turrets to free, barricades that must be broken to pass | Sonnet |
 | 8 | Juice + audio | Screen shake, hit flash, damage popups, synthesized SFX, no audio files | Sonnet |
 | 9 | Content pass | 20 levels generated, measured and tuned against the probe | Me |
 | 10 | Forks | Corridor returning multiple spans; only if levels feel same-y without it | Me |
 
-**Phase 6 is next.** The lane is the last of the three hardcoded things, and `choke` is
-currently a density spike standing in for geometry it does not have yet.
+**Phase 6b is next.** The corridor gives a narrow lane its shape but not its danger, and
+the measurements above say plainly that shape alone makes a level slightly easier. Hazards
+are what make threading a gap cost something.
 
 Phase 9 now inherits a working per-level harness rather than building one, and extends the
 campaign from twelve levels to twenty.
@@ -194,6 +235,10 @@ Two findings came straight out of using it:
   If the campaign is too long to sit through, the fix is shorter levels, not fewer.
 - **Generated levels can feel samey.** Templates plus seeds trade authorial control for
   volume. If level 9 and level 14 play the same, the fix is more templates, not more seeds.
+- **Lane shape may not be worth its complexity.** It measurably does not change difficulty,
+  so it has to earn its place on how it looks and how it plays under the thumb. If a pinch
+  is not interesting to steer through once hazards are in it, the corridor is an expensive
+  backdrop.
 - **Forks fight the spawn model.** Reds spawn biased toward the squad's column and the
   anchor clamps to one span; a fork means deciding what the swarm does on the path not
   taken. This is why forks are last and conditional.

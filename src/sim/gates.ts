@@ -1,5 +1,6 @@
 import { Rng } from '../core/rng.js';
 import { GATE_FIRST, GATE_SPACING, LANE_W, MAX_BLUE } from './config.js';
+import { centreAt, Corridor, halfWidthAt } from './corridor.js';
 
 export type GateKind = 'mul' | 'add' | 'sub' | 'div';
 
@@ -18,6 +19,9 @@ export interface Gate {
 
 /** Half-width of a gate panel. Narrow enough that a gate is easy to slip past. */
 export const GATE_PANEL_W = 95;
+
+/** How far either side of the lane's centre a gate may sit, room permitting. */
+export const GATE_DRIFT = 135;
 
 /**
  * Whether the squad is passing through the panel. A gate offers one thing, so
@@ -66,6 +70,7 @@ export function buildGates(
   count: number,
   first: number = GATE_FIRST,
   spacing: number = GATE_SPACING,
+  corridor?: Corridor,
 ): Gate[] {
   const gates: Gate[] = [];
   for (let i = 0; i < count; i++) {
@@ -90,9 +95,19 @@ export function buildGates(
       op = { kind: 'add', value: 95 + i * 85 };
     }
 
-    // The opening gate sits dead centre: a player who has not yet learned that
-    // gates are dodgeable should not lose the run to missing the first one.
-    const cx = i === 0 ? LANE_W / 2 : LANE_W / 2 + rng.range(-135, 135);
+    // Placed relative to the lane where the gate actually stands, not to the
+    // lane's nominal width: in a bend or a pinch a fixed offset puts the panel
+    // outside the drivable span, where it can never be taken or dodged.
+    const centre = corridor ? centreAt(corridor, y) : LANE_W / 2;
+    const half = corridor ? halfWidthAt(corridor, y) : LANE_W / 2;
+    // A gate wanders GATE_DRIFT either side, except where the corridor is too
+    // tight to fit the whole panel at that offset — so an open lane keeps the
+    // placement it has always had, and a pinch keeps the panel reachable
+    // instead of burying half of it in the wall. The opening gate sits dead
+    // centre: a player who has not yet learned that gates are dodgeable should
+    // not lose the run to missing the first one.
+    const drift = Math.min(GATE_DRIFT, Math.max(0, half - GATE_PANEL_W));
+    const cx = i === 0 ? centre : centre + rng.range(-drift, drift);
     gates.push({ y, cx, op, taken: false });
   }
   return gates;

@@ -321,7 +321,7 @@ describe('enemy types', () => {
     // The squad advances at SCROLL_SPEED, so the standoff has to outlast the
     // window: far enough that the crowd cannot close on a stationary target
     // before the bullets arrive.
-    const standoff = w.radius + 700;
+    const standoff = w.radiusY + 700;
     w.redCount = 1;
     w.redX[0] = w.anchorX;
     w.redY[0] = w.anchorY + standoff;
