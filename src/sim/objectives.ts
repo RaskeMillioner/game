@@ -1,6 +1,7 @@
 import { Rng } from '../core/rng.js';
 import { LANE_W, MAX_BLUE, WEAPONS } from './config.js';
 import { centreAt, Corridor, halfWidthAt } from './corridor.js';
+import { clearOfHole } from './gates.js';
 
 export type ObjectiveKind = 'weapon' | 'recruit';
 
@@ -134,9 +135,12 @@ export function buildObjectives(
     // wall.
     const centre = corridor ? centreAt(corridor, y) : LANE_W / 2;
     const half = corridor ? halfWidthAt(corridor, y) : LANE_W / 2;
+    const x = corridor
+      ? clearOfHole(corridor, y, centre + side * half * 0.56, OBJECTIVE_W / 2, centre, half)
+      : centre + side * half * 0.56;
     out.push({
       kind,
-      x: centre + side * half * 0.56,
+      x,
       y,
       maxHp: hp,
       hp,

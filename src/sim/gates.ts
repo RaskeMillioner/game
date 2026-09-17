@@ -1,6 +1,6 @@
 import { Rng } from '../core/rng.js';
 import { GATE_FIRST, GATE_SPACING, LANE_W, MAX_BLUE } from './config.js';
-import { centreAt, Corridor, halfWidthAt } from './corridor.js';
+import { centreAt, Corridor, halfWidthAt, holeCentreAt, holeHalfWidthAt } from './corridor.js';
 
 export type GateKind = 'mul' | 'add' | 'sub' | 'div';
 
@@ -107,10 +107,37 @@ export function buildGates(
     // centre: a player who has not yet learned that gates are dodgeable should
     // not lose the run to missing the first one.
     const drift = Math.min(GATE_DRIFT, Math.max(0, half - GATE_PANEL_W));
-    const cx = i === 0 ? centre : centre + rng.range(-drift, drift);
+    let cx = i === 0 ? centre : centre + rng.range(-drift, drift);
+    // A panel buried in a hazard can be neither taken nor dodged, so a gate
+    // that lands on one slides to the middle of the roomier side.
+    if (corridor) cx = clearOfHole(corridor, y, cx, GATE_PANEL_W, centre, half);
     gates.push({ y, cx, op, taken: false });
   }
   return gates;
 }
 
 export const GATE_MID = LANE_W / 2;
+
+/**
+ * Slides `x` out of the hazard at `y`, if there is one, onto the middle of
+ * whichever side has more room for something `pad` wide. Shared by gates and
+ * structures: content the player cannot reach is worse than no content.
+ */
+export function clearOfHole(
+  corridor: Corridor,
+  y: number,
+  x: number,
+  pad: number,
+  centre: number,
+  half: number,
+): number {
+  const hw = holeHalfWidthAt(corridor, y);
+  if (hw <= 0) return x;
+  const hc = holeCentreAt(corridor, y);
+  if (Math.abs(x - hc) > hw + pad) return x;
+  const lo = centre - half;
+  const hi = centre + half;
+  const leftRoom = (hc - hw) - lo;
+  const rightRoom = hi - (hc + hw);
+  return leftRoom >= rightRoom ? lo + leftRoom / 2 : hi - rightRoom / 2;
+}

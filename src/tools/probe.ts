@@ -10,6 +10,7 @@ import { CAMPAIGN } from '../sim/campaign.js';
 import { LANE_W, SCROLL_SPEED } from '../sim/config.js';
 import { ENEMIES, ENEMY_KINDS } from '../sim/enemies.js';
 import { gateIsGood, GATE_PANEL_W } from '../sim/gates.js';
+import { centreAt, halfWidthAt, holeCentreAt, holeHalfWidthAt } from '../sim/corridor.js';
 import { endlessLevel, LevelDef } from '../sim/levels.js';
 import { World } from '../sim/world.js';
 
@@ -56,6 +57,85 @@ function objectiveSeeker(commit: number): Strategy {
   };
 }
 
+/**
+ * Plays like `obj-light` but commits to a side before a hazard opens.
+ *
+ * Exists to answer whether a hazard is a skill test or a flat tax: every other
+ * strategy is blind to them, so a toll they all pay equally could just as
+ * easily be unavoidable. If this one pays materially less, the skill is real
+ * and the others simply do not have it.
+ */
+function pitAware(commit: number): Strategy {
+  const fallback = objectiveSeeker(commit);
+  return (w, t) => {
+    // Aim at the side of the hazard where it is *widest*, not where it first
+    // appears. Sampling the nearest hole instead means chasing a gap that is
+    // still easing open, which lands the squad near the lane's centre at
+    // exactly the moment the hole arrives there — a mistake that reads as
+    // hazard-awareness while paying the same toll as ignoring them.
+    let bestY = -1;
+    let bestHw = 0;
+    for (let ahead = 200; ahead < 2400; ahead += 100) {
+      const y = w.anchorY + ahead;
+      const hw = holeHalfWidthAt(w.corridor, y);
+      if (hw > bestHw) {
+        bestHw = hw;
+        bestY = y;
+      }
+    }
+    if (bestY < 0) {
+      fallback(w, t);
+      return;
+    }
+    const hc = holeCentreAt(w.corridor, bestY);
+    const centre = centreAt(w.corridor, bestY);
+    const half = halfWidthAt(w.corridor, bestY);
+    const left = (hc - bestHw) - (centre - half);
+    const right = (centre + half) - (hc + bestHw);
+    w.targetX = left >= right
+      ? (centre - half) + left / 2
+      : (centre + half) - right / 2;
+  };
+}
+
+/**
+ * Objective play that also routes around a pit instead of ploughing through it.
+ *
+ * The fair comparison against `obj-light`: same priorities, same commitment
+ * distance, differing only in whether it steers around hazards. `pit-aware`
+ * above dodges perfectly and starves doing it, which makes its toll per peak
+ * body meaningless — it dies before it has a crowd to lose.
+ */
+function objectivePitSeeker(commit: number): Strategy {
+  const fallback = objectiveSeeker(commit);
+  return (w, t) => {
+    let bestY = -1;
+    let bestHw = 0;
+    for (let ahead = 0; ahead < 1400; ahead += 100) {
+      const y = w.anchorY + ahead;
+      const hw = holeHalfWidthAt(w.corridor, y);
+      if (hw > bestHw) {
+        bestHw = hw;
+        bestY = y;
+      }
+    }
+    if (bestY < 0) {
+      fallback(w, t);
+      return;
+    }
+    const hc = holeCentreAt(w.corridor, bestY);
+    const centre = centreAt(w.corridor, bestY);
+    const half = halfWidthAt(w.corridor, bestY);
+    // Takes the side the objective it was already heading for is on, so
+    // dodging costs it the pickup only when the pit is genuinely in the way.
+    const o = w.objectives.find((x) => !x.resolved && x.y > w.anchorY - 50);
+    const want = o && o.y - w.anchorY < commit ? o.x : w.anchorX;
+    const leftMid = (centre - half) + ((hc - bestHw) - (centre - half)) / 2;
+    const rightMid = (centre + half) - ((centre + half) - (hc + bestHw)) / 2;
+    w.targetX = Math.abs(want - leftMid) <= Math.abs(want - rightMid) ? leftMid : rightMid;
+  };
+}
+
 const strategies: Record<string, Strategy> = {
   passive: (w) => { w.targetX = LANE_W / 2; },
   optimal: gateSeeker(true),
@@ -63,11 +143,13 @@ const strategies: Record<string, Strategy> = {
   sweep: (w, t) => { w.targetX = LANE_W / 2 + Math.sin(t * 0.7) * 300; },
   'obj-greedy': objectiveSeeker(2400),
   'obj-light': objectiveSeeker(900),
+  'pit-aware': pitAware(900),
+  'obj-pit': objectivePitSeeker(900),
 };
 
 interface Result {
   seconds: number; kills: number; peak: number; died: boolean; won: boolean;
-  broken: number; passed: number; leak: number;
+  broken: number; passed: number; leak: number; hazard: number;
   leaksByType: number[]; killsByType: number[]; contactsByType: number[];
 }
 
@@ -99,6 +181,7 @@ function runLevel(strategy: Strategy, level: LevelDef): Result {
     broken: seen.filter((o) => o.broken).length,
     passed: seen.length,
     leak: w.kills + w.leaked > 0 ? w.leaked / (w.kills + w.leaked) : 0,
+    hazard: w.hazardLosses,
     leaksByType: Array.from(w.leaksByType),
     killsByType: Array.from(w.killsByType),
     contactsByType: Array.from(w.contactsByType),
@@ -193,7 +276,7 @@ function targetWin(index: number, total: number): number {
   return total < 2 ? WIN_LAST : WIN_FIRST + (WIN_LAST - WIN_FIRST) * (index / (total - 1));
 }
 
-console.log('\nlevel                  template     diff   len   win%  target   mean(s)  peak   leak%   flag');
+console.log('\nlevel                  template     diff   len   win%  target   mean(s)  peak   leak%   pit   flag');
 const curve: number[] = [];
 for (const [index, level] of CAMPAIGN.entries()) {
   const results: Result[] = [];
@@ -210,6 +293,7 @@ for (const [index, level] of CAMPAIGN.entries()) {
     ` ${(win * 100).toFixed(0).padStart(5)}% ${(target * 100).toFixed(0).padStart(6)}%` +
     ` ${avg(results, (r) => r.seconds).toFixed(1).padStart(8)}` +
     ` ${avg(results, (r) => r.peak).toFixed(0).padStart(6)} ${(avg(results, (r) => r.leak) * 100).toFixed(1).padStart(6)}%` +
+    ` ${avg(results, (r) => r.hazard).toFixed(0).padStart(6)}` +
     `   ${flag}`,
   );
 }
@@ -230,4 +314,37 @@ for (let i = 0; i < curve.length; i++) {
     else bar += ' ';
   }
   console.log(`${String(CAMPAIGN[i]?.id).padStart(2)} |${bar}| ${(win * 100).toFixed(0).padStart(3)}%`);
+}
+
+/**
+ * Do hazards separate careful play from careless? That is the only question
+ * that decides whether they earn their place: a hazard everyone walks into, or
+ * one nobody ever touches, is not a skill test either way.
+ *
+ * Measured on the two levels that have them, across strategies that differ
+ * precisely in how much attention they pay to where they are going.
+ */
+console.log('\nhazard toll by strategy (levels 4 and 10)');
+// Priced against peak squad, not in raw bodies: the toll is proportional, so a
+// three-thousand-strong crowd pays more in absolute terms for the very same
+// mistake, and the raw column flatters whoever died before the pit.
+console.log('strategy        bodies   as % of peak   win%');
+for (const name of ['passive', 'obj-light', 'obj-pit', 'pit-aware'] as const) {
+  let lost = 0;
+  let peak = 0;
+  let won = 0;
+  let runs = 0;
+  for (const level of CAMPAIGN.filter((l) => (l.hazards?.length ?? 0) > 0)) {
+    for (let i = 0; i < 12; i++) {
+      const r = runLevel(strategies[name] as Strategy, { ...level, seed: (level.seed + i * 2654435761) >>> 0 });
+      lost += r.hazard;
+      peak += r.peak;
+      if (r.won) won++;
+      runs++;
+    }
+  }
+  console.log(
+    `${name.padEnd(14)} ${(lost / runs).toFixed(0).padStart(7)} ` +
+    `${((lost / peak) * 100).toFixed(1).padStart(13)}% ${((won / runs) * 100).toFixed(0).padStart(6)}%`,
+  );
 }

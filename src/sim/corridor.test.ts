@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { CAMPAIGN } from './campaign.js';
 import { LANE_W, SCROLL_SPEED } from './config.js';
 import {
-  buildCorridor, centreAt, clampToCorridor, CorridorSpec, halfWidthAt, isStraight,
-  LANE_HALF, leftAt, MIN_HALF_WIDTH, rightAt, SQUEEZE_THRESHOLD, STRAIGHT,
+  buildCorridor, centreAt, clampToCorridor, CorridorSpec, halfWidthAt, HazardSpec,
+  hazardOverlap, holeCentreAt, holeHalfWidthAt, isStraight, LANE_HALF, leftAt,
+  MIN_HALF_WIDTH, MIN_SPAN_HALF, rightAt, spanHalfWidthAt, spansAt,
+  SQUEEZE_THRESHOLD, STRAIGHT,
 } from './corridor.js';
 import { formationSqueeze } from './formation.js';
 import { GATE_PANEL_W } from './gates.js';
@@ -15,6 +17,7 @@ const LEN = 15000;
 
 const PINCH: CorridorSpec = { shape: 'pinch', tightness: 0.55, at: 0.5, span: 0.25 };
 const BEND: CorridorSpec = { shape: 'bend', tightness: 0.6, sway: 0.45, at: 0.5, span: 0.4 };
+const HAZARD: HazardSpec = { at: 0.5, span: 0.2, halfWidth: 120 };
 
 describe('corridor geometry', () => {
   it('is a straight full-width lane by default', () => {
@@ -186,5 +189,178 @@ describe('content stays reachable', () => {
       w.step(1 / 60);
     }
     expect(w.state).toBe('won');
+  });
+});
+
+describe('hazards', () => {
+  it('leaves the lane whole when a level asks for none', () => {
+    // The migration guard, exactly as the straight corridor was for 6a: a level
+    // without hazards must behave as though holes were never added.
+    const c = buildCorridor(STRAIGHT, LEN);
+    expect(isStraight(c)).toBe(true);
+    for (let y = 0; y <= LEN; y += 250) {
+      expect(holeHalfWidthAt(c, y)).toBe(0);
+      expect(spansAt(c, y)).toEqual([{ lo: 0, hi: LANE_W }]);
+      expect(spanHalfWidthAt(c, y, 360)).toBe(LANE_HALF);
+      expect(hazardOverlap(c, y, 360, 220)).toBe(0);
+    }
+  });
+
+  it('splits the lane into two ordered spans, both wide enough to thread', () => {
+    const c = buildCorridor(STRAIGHT, LEN, [HAZARD]);
+    let sawSplit = false;
+    for (let y = 0; y <= LEN; y += 30) {
+      const spans = spansAt(c, y);
+      expect(spans.length).toBeGreaterThan(0);
+      for (let i = 1; i < spans.length; i++) {
+        expect(spans[i].lo).toBeGreaterThan(spans[i - 1].hi);
+      }
+      for (const s of spans) expect(s.hi).toBeGreaterThan(s.lo);
+      if (spans.length === 2) {
+        sawSplit = true;
+        // A gap no crowd can thread is an unwinnable level, not a hard one.
+        for (const s of spans) {
+          expect((s.hi - s.lo) / 2).toBeGreaterThanOrEqual(MIN_SPAN_HALF - 0.5);
+        }
+      }
+    }
+    expect(sawSplit).toBe(true);
+  });
+
+  it('never leaves a hazard wide enough to close a side', () => {
+    // An absurd request has to be clamped rather than honoured.
+    const c = buildCorridor(STRAIGHT, LEN, [{ at: 0.5, span: 0.2, halfWidth: 5000 }]);
+    for (let y = 0; y <= LEN; y += 30) {
+      for (const s of spansAt(c, y)) {
+        expect((s.hi - s.lo) / 2).toBeGreaterThanOrEqual(MIN_SPAN_HALF - 0.5);
+      }
+    }
+  });
+
+  it('keeps the squad out of the pit however it is steered', () => {
+    const level: LevelDef = { ...(CAMPAIGN[0] as LevelDef), hazards: [HAZARD], length: LEN };
+    const w = new World(level, VIEW_H);
+    for (let i = 0; w.state === 'running' && i < 60 * 90; i++) {
+      // Includes the frame the hole eases open underneath a squad sitting dead
+      // centre, which is the case a naive clamp gets wrong.
+      w.targetX = i % 120 < 60 ? -5000 : 5000;
+      w.step(1 / 60);
+      const hw = holeHalfWidthAt(w.corridor, w.anchorY);
+      if (hw <= 0) continue;
+      const hc = holeCentreAt(w.corridor, w.anchorY);
+      expect(Math.abs(w.anchorX - hc)).toBeGreaterThan(hw - 1);
+    }
+  });
+
+  it('squeezes the crowd into the gap, narrowing its guns', () => {
+    // The mechanism that actually makes a hazard dangerous: not the bodies it
+    // takes, but the firing line it costs you while you thread it.
+    const level: LevelDef = { ...(CAMPAIGN[0] as LevelDef), hazards: [HAZARD], length: LEN };
+    const w = new World(level, VIEW_H);
+    w.count = 400;
+    w.step(1 / 60);
+    const openX = w.radiusX;
+
+    let narrowest = Infinity;
+    while (w.state === 'running' && w.anchorY < LEN * 0.55) {
+      w.count = 400;
+      w.step(1 / 60);
+      if (holeHalfWidthAt(w.corridor, w.anchorY) > 0) narrowest = Math.min(narrowest, w.radiusX);
+    }
+    expect(narrowest).toBeLessThan(openX * 0.75);
+  });
+
+  it('charges for standing in the pit, and charges more the deeper you are', () => {
+    const c = buildCorridor(STRAIGHT, LEN, [HAZARD]);
+    const y = LEN / 2;
+    const hc = holeCentreAt(c, y);
+    const hw = holeHalfWidthAt(c, y);
+    expect(hw).toBeGreaterThan(0);
+    const dead = hazardOverlap(c, y, hc, 200);
+    const grazing = hazardOverlap(c, y, hc + hw + 150, 200);
+    const clear = hazardOverlap(c, y, hc + hw + 400, 200);
+    expect(dead).toBeGreaterThan(grazing);
+    expect(grazing).toBeGreaterThan(0);
+    expect(clear).toBe(0);
+    // A crowd centred on the pit is mostly, but never entirely, inside it.
+    expect(dead).toBeLessThanOrEqual(1);
+  });
+
+  it('costs bodies to cross a pit and far less to thread one', () => {
+    // HAZARD sits on the lane's centre line, so the left span is roughly
+    // [0, 240] and the right [480, 720]. Both drivers are written against those
+    // absolutes rather than reacting to the hole, so neither is at the mercy of
+    // how far ahead it happens to look.
+    const level: LevelDef = { ...(CAMPAIGN[0] as LevelDef), hazards: [HAZARD], length: LEN };
+
+    const run = (drive: (w: World, i: number) => void): number => {
+      const w = new World(level, VIEW_H);
+      for (let i = 0; w.state === 'running' && w.anchorY < LEN * 0.65; i++) {
+        w.count = 400;
+        drive(w, i);
+        w.step(1 / 60);
+      }
+      return w.hazardLosses;
+    };
+
+    // Picks the left side before the hazard exists and never leaves it.
+    const threading = run((w) => { w.targetX = 120; });
+    // Traverses the pit on a slow enough cadence to actually be inside it,
+    // rather than snapping between the two walls.
+    const crossing = run((w, i) => { w.targetX = (i / 90) % 2 < 1 ? 120 : 600; });
+
+    expect(threading).toBeLessThan(crossing / 2);
+  });
+});
+
+describe('content stays clear of hazards', () => {
+  it('never puts a gate panel or a structure in a pit', () => {
+    // The phase-5 bug class once more: a reward inside a hazard is a reward
+    // that cannot be taken, and a gate panel in one can be neither used nor
+    // dodged.
+    for (const level of CAMPAIGN) {
+      const plan = buildLevel({ ...level, hazards: [HAZARD] });
+      for (const g of plan.gates) {
+        const hw = holeHalfWidthAt(plan.corridor, g.y);
+        if (hw <= 0) continue;
+        const hc = holeCentreAt(plan.corridor, g.y);
+        expect(Math.abs(g.cx - hc)).toBeGreaterThanOrEqual(hw - 0.5);
+      }
+      for (const o of plan.objectives) {
+        const hw = holeHalfWidthAt(plan.corridor, o.y);
+        if (hw <= 0) continue;
+        const hc = holeCentreAt(plan.corridor, o.y);
+        expect(Math.abs(o.x - hc)).toBeGreaterThanOrEqual(hw - 0.5);
+      }
+    }
+  });
+
+  it('leaves a hazard level winnable by the player the campaign is tuned for', () => {
+    // Deliberately the probe's own reference strategy rather than a
+    // hazard-dodging one. A player who commits to a side perfectly abandons the
+    // objectives to do it and wins far less often — the toll is meant to be a
+    // decision, not a rule, so the level has to be clearable while paying it.
+    const level = CAMPAIGN.find((l) => (l.hazards?.length ?? 0) > 0) as LevelDef;
+    expect(level).toBeDefined();
+    let won = 0;
+    for (let seed = 0; seed < 5; seed++) {
+      const w = new World({ ...level, seed: (level.seed + seed * 2654435761) >>> 0 }, VIEW_H);
+      const budget = Math.ceil(((level.length / SCROLL_SPEED) * 1.35 + 10) * 60);
+      for (let i = 0; i < budget && w.state === 'running'; i++) {
+        const o = w.objectives.find((x) => !x.resolved && x.y > w.anchorY - 50);
+        if (o && o.y - w.anchorY < 900) {
+          w.targetX = o.x;
+        } else {
+          // Falls back to the next gate rather than to the lane's centre line.
+          // Centre is where a hazard opens, so parking there — which used to be
+          // the safest thing a player could do — is now the worst.
+          const g = w.gates.find((x) => !x.taken && x.y > w.anchorY - 200);
+          w.targetX = g ? g.cx : centreAt(w.corridor, w.anchorY);
+        }
+        w.step(1 / 60);
+      }
+      if (w.state === 'won') won++;
+    }
+    expect(won).toBeGreaterThan(2);
   });
 });

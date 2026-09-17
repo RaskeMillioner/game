@@ -131,5 +131,19 @@ export const FIRE_FAN_REF = 520;
 export const GATE_SPACING = 3400;
 export const GATE_FIRST = 1250;
 
+/**
+ * Fraction of the crowd lost per second while the whole of it stands inside a
+ * hazard. Scaled by how much actually overlaps, so a graze costs a sliver and
+ * driving straight through costs dearly.
+ */
+export const HAZARD_RATE = 0.55;
+
+/**
+ * How far ahead the crowd reads the lane when deciding how tightly to pack.
+ * 600 units is two and a half seconds of travel — enough to be narrow by the
+ * time a hazard's lip arrives, which is what makes picking a side early pay.
+ */
+export const SQUEEZE_LOOKAHEAD = 600;
+
 export const MAX_CORPSE = 400;
 export const CORPSE_LIFE = 4.0;

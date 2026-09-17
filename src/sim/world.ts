@@ -4,10 +4,12 @@ import {
   ANCHOR_FOLLOW, BLUE_FOLLOW, BREAKTHROUGH_PAD, BULLET_RADIUS, BULLET_RANGE, CONTACT_PAD, CORPSE_LIFE,
   FIRE_COLUMN_FILL, FIRE_FAN_REF, LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
   RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_EDGE_PAD, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
-  START_BLUE, WEAPONS,
+  HAZARD_RATE, SQUEEZE_LOOKAHEAD, START_BLUE, WEAPONS,
 } from './config.js';
 import { ENEMIES, ENEMY_KINDS } from './enemies.js';
-import { clampToCorridor, Corridor, centreAt, halfWidthAt } from './corridor.js';
+import {
+  clampToCorridor, Corridor, centreAt, hazardOverlap, spanHalfWidthAt,
+} from './corridor.js';
 import { formationRadius, formationSqueeze, slotLag, slotX, slotY } from './formation.js';
 import { applyGate, Gate, gateHit } from './gates.js';
 import { buildLevel, LevelDef, SpawnWave } from './levels.js';
@@ -55,6 +57,12 @@ export class World {
    * of the swarm unshot.
    */
   leaked = 0;
+  /** Bodies lost inside hazards. Priced separately so the probe can attribute them. */
+  hazardLosses = 0;
+  /** Fraction of the crowd currently standing in a hazard, for the renderer. */
+  hazardOverlap = 0;
+  /** Sub-body remainder of the hazard toll, carried between frames. */
+  private hazardDebt = 0;
   gates: Gate[];
   objectives: Objective[];
   /** World position of the finish line. Infinite on an endless level. */
@@ -131,7 +139,24 @@ export class World {
    * so everything derived from it is unchanged on a straight level.
    */
   get squeeze(): number {
-    return formationSqueeze(this.rendered, halfWidthAt(this.corridor, this.anchorY));
+    // The tightest span within sight ahead, not just the one underfoot.
+    //
+    // Reading only the current position made a hazard an unavoidable toll
+    // rather than something to steer around: the crowd stayed full width right
+    // up to the lip, so the hole opened underneath a 440-wide formation and
+    // took its cut before there was any chance to be narrow. Every strategy the
+    // probe measures paid the same 15-19% of peak, however carefully it drove.
+    //
+    // Looking ahead lets a crowd funnel down before it arrives, which is both
+    // what a crowd would really do and what makes committing to a side early
+    // worth anything.
+    const corridor = this.corridor;
+    let half = spanHalfWidthAt(corridor, this.anchorY, this.anchorX);
+    for (let ahead = SQUEEZE_LOOKAHEAD / 4; ahead <= SQUEEZE_LOOKAHEAD; ahead += SQUEEZE_LOOKAHEAD / 4) {
+      const h = spanHalfWidthAt(corridor, this.anchorY + ahead, this.anchorX);
+      if (h < half) half = h;
+    }
+    return formationSqueeze(this.rendered, half);
   }
 
   /**
@@ -183,6 +208,7 @@ export class World {
     this.collideObjectives();
     this.collideSquad();
     this.resolveObjectives();
+    this.stepHazard(dt);
     this.stepCorpses(dt);
 
     if (this.count <= 0) {
@@ -202,7 +228,11 @@ export class World {
     // On a full-width lane the margin cap works out to LANE_W * 0.36 exactly as
     // it did before the corridor existed, which is what makes a straight level
     // bit-identical to the pre-corridor sim.
-    const half = halfWidthAt(this.corridor, this.anchorY);
+    // Measured against the span being steered into rather than the lane as a
+    // whole, so the gap beside a hazard gets a margin in proportion to itself.
+    // With no hazard open this returns the lane's own half-width, and the cap
+    // works out to LANE_W * 0.36 exactly as it did before corridors existed.
+    const half = spanHalfWidthAt(this.corridor, this.anchorY, this.targetX);
     const margin = Math.min(this.radiusX * 0.9, half * 0.72);
     this.targetX = clampToCorridor(this.corridor, this.anchorY, this.targetX, margin);
     const k = 1 - Math.exp(-dt * ANCHOR_FOLLOW);
@@ -597,6 +627,40 @@ export class World {
         this.count = 0;
         return;
       }
+    }
+  }
+
+  /**
+   * Bodies lost to whatever part of the crowd is standing in a hazard.
+   *
+   * Proportional to the crowd rather than a flat toll, so a hazard still means
+   * something to a squad of three thousand. That does not make size a
+   * liability the way an undodgeable proportional source would: a hazard can be
+   * steered around, so it never caps growth, and a bigger crowd still comes out
+   * the far side with more bodies than a smaller one would have.
+   */
+  private stepHazard(dt: number): void {
+    const overlap = hazardOverlap(this.corridor, this.anchorY, this.anchorX, this.radiusX);
+    if (overlap <= 0) {
+      this.hazardOverlap = 0;
+      return;
+    }
+    this.hazardOverlap = overlap;
+    this.hazardDebt += this.count * overlap * HAZARD_RATE * dt;
+    // Accumulated in fractions and spent in whole bodies, so a graze that costs
+    // less than one blue per frame still costs something over time.
+    const toll = Math.floor(this.hazardDebt);
+    if (toll <= 0) return;
+    this.hazardDebt -= toll;
+    const paid = Math.min(toll, this.count);
+    this.count -= paid;
+    this.hazardLosses += paid;
+    for (let i = 0; i < paid && i < 6; i++) {
+      this.addCorpse(
+        this.anchorX + this.rng.range(-this.radiusX, this.radiusX),
+        this.anchorY + this.rng.range(-this.radiusY, this.radiusY),
+        false,
+      );
     }
   }
 

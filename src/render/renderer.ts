@@ -1,7 +1,9 @@
 import {
   BULLET_RADIUS, CORPSE_LIFE, LANE_W, MAX_BLUE_RENDER, MAX_CORPSE, WEAPONS,
 } from '../sim/config.js';
-import { Corridor, leftAt, rightAt } from '../sim/corridor.js';
+import {
+  Corridor, holeCentreAt, holeHalfWidthAt, leftAt, rightAt,
+} from '../sim/corridor.js';
 import { ENEMIES, ENEMY_KINDS } from '../sim/enemies.js';
 import { type Gate, GATE_PANEL_W, gateIsGood, gateLabel } from '../sim/gates.js';
 import {
@@ -78,6 +80,9 @@ const FINISH_POST_H = 260;
 const FINISH_POST_W = 16;
 const COL_WIN = '#43d9a3';
 const COL_LOCKED = '#2a2a36';
+/** Hazards read as a hole in the ground rather than an object standing on it. */
+const COL_HAZARD = '#120a10';
+const COL_HAZARD_EDGE = '#c2384f';
 
 /**
  * Draws the whole world with a fixed, tiny number of fill calls: one path per
@@ -284,6 +289,66 @@ export class Renderer {
     for (let i = 1; i <= end; i++) ctx.lineTo(lx[i], ly[i]);
     ctx.moveTo(rx[0], ry[0]);
     for (let i = 1; i <= end; i++) ctx.lineTo(rx[i], ry[i]);
+    ctx.stroke();
+
+    this.drawHazard(corridor, dzBottom);
+  }
+
+  private readonly hazLX = new Float32Array(GROUND_STEPS + 1);
+  private readonly hazLY = new Float32Array(GROUND_STEPS + 1);
+  private readonly hazRX = new Float32Array(GROUND_STEPS + 1);
+  private readonly hazRY = new Float32Array(GROUND_STEPS + 1);
+
+  /**
+   * The hazard, punched out of the ground that was just drawn. Cut from the
+   * lane rather than stood on top of it, so it reads as somewhere you cannot
+   * go instead of as another billboard to shoot.
+   */
+  private drawHazard(corridor: Corridor, dzBottom: number): void {
+    const proj = this.projector;
+    const lx = this.hazLX;
+    const ly = this.hazLY;
+    const rx = this.hazRX;
+    const ry = this.hazRY;
+    let lo = -1;
+    let hi = -1;
+    for (let i = 0; i <= GROUND_STEPS; i++) {
+      const f = i / GROUND_STEPS;
+      const dz = dzBottom + (FAR_DZ - dzBottom) * f * f;
+      const worldY = proj.camY + dz;
+      const hw = holeHalfWidthAt(corridor, worldY);
+      if (hw <= 0) continue;
+      const hc = holeCentreAt(corridor, worldY);
+      // Each projection read straight out into scalars: `project` hands back a
+      // single reused record, which is what broke the finish line in phase 5.
+      const l = proj.project(hc - hw, worldY);
+      lx[i] = l.x;
+      ly[i] = l.y;
+      const r = proj.project(hc + hw, worldY);
+      rx[i] = r.x;
+      ry[i] = r.y;
+      if (lo < 0) lo = i;
+      hi = i;
+    }
+    if (lo < 0 || hi <= lo) return;
+
+    const ctx = this.ctx;
+    ctx.fillStyle = COL_HAZARD;
+    ctx.beginPath();
+    ctx.moveTo(lx[lo], ly[lo]);
+    for (let i = lo + 1; i <= hi; i++) ctx.lineTo(lx[i], ly[i]);
+    for (let i = hi; i >= lo; i--) ctx.lineTo(rx[i], ry[i]);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = COL_HAZARD_EDGE;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(lx[lo], ly[lo]);
+    for (let i = lo + 1; i <= hi; i++) ctx.lineTo(lx[i], ly[i]);
+    ctx.lineTo(rx[hi], ry[hi]);
+    for (let i = hi - 1; i >= lo; i--) ctx.lineTo(rx[i], ry[i]);
+    ctx.closePath();
     ctx.stroke();
   }
 
@@ -651,6 +716,15 @@ export class Renderer {
       pad + 34 * s,
     );
     this.drawProgress(w, pad, s);
+
+    // Standing in a hazard costs bodies every frame, and the crowd is drawn
+    // over the top of it, so the count alone is easy to miss in the moment.
+    if (w.hazardOverlap > 0.02) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = COL_HAZARD_EDGE;
+      ctx.font = `bold ${Math.round(34 * s)}px system-ui, -apple-system, sans-serif`;
+      ctx.fillText('CLEAR THE PIT', this.canvas.width / 2, pad + 190 * s);
+    }
   }
 
   /**

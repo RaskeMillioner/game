@@ -1,6 +1,8 @@
 import { Rng } from '../core/rng.js';
 import { GATE_FIRST, GATE_SPACING, SCROLL_SPEED } from './config.js';
-import { buildCorridor, Corridor, CorridorSpec, STRAIGHT } from './corridor.js';
+import {
+  buildCorridor, Corridor, CorridorSpec, HazardSpec, STRAIGHT,
+} from './corridor.js';
 import {
   BRUTE, ENEMY_KINDS, EnemyType, EXPLODER, enemyHp, GRUNT, mixAt, pickType, RUNNER,
 } from './enemies.js';
@@ -71,6 +73,8 @@ export interface LevelDef {
   readonly structures: StructureSpec;
   /** Lane shape. Omitted means a straight full-width lane. */
   readonly corridor?: CorridorSpec;
+  /** Static obstructions splitting the lane. Omitted means an unbroken one. */
+  readonly hazards?: readonly HazardSpec[];
 }
 
 /** Everything a `World` needs to run a level, generated once at construction. */
@@ -338,7 +342,7 @@ export function buildLevel(def: LevelDef): LevelPlan {
 
   // Built before the structures, because where a gate or a crate can sit is a
   // question about the lane at that point rather than about the lane's width.
-  const corridor = buildCorridor(def.corridor ?? STRAIGHT, horizon);
+  const corridor = buildCorridor(def.corridor ?? STRAIGHT, horizon, def.hazards ?? []);
 
   const gates = buildGates(rng, gateCount, s.gateFirst, s.gateSpacing, corridor);
   // Nudging an objective clear of a gate can push it past where it was meant to

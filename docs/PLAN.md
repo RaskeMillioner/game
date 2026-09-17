@@ -8,8 +8,8 @@ Revised after the first playtests. The original plan described a top-down auto-r
 paired gates as the central decision; almost none of that survived contact with play, and
 this document describes what the game actually is and where it goes next.
 
-Phases 4, 5 and the corridor half of 6 are built. The game is a twelve-level campaign, not
-one endless run, and the lane has a shape.
+Phases 4, 5 and 6 are built. The game is a twelve-level campaign, not one endless run, the
+lane has a shape, and it can split around something you have to steer past.
 
 ## 1. Where the code is
 
@@ -29,9 +29,10 @@ Playable and deployed at `raskemillioner.github.io/game/`. 34 kB, 12 kB gzipped,
 | Finish line and win state | Levels end at a line; `won` and `dead` are separate outcomes |
 | Campaign | Twelve levels, level select, next-level unlock persisted in `localStorage` |
 | Corridor | Lane shape over `worldY`: narrowing, pinches and bends; the crowd compresses to fit |
+| Hazards | Pits that split the lane into two spans; the crowd funnels down to thread one |
 | Balance harness | Headless seeded probe: strategy survival, per-type attribution, and per-level win rate against a target ramp; 48 tests |
 
-**Not built:** hazards, new structure kinds, bosses, audio, juice.
+**Not built:** new structure kinds, bosses, audio, juice.
 
 ## 2. Confirmed design criteria
 
@@ -132,6 +133,54 @@ Two decisions worth writing down:
   time for its difficulty to mean anything. Difficulty comes from the enemies, not from
   handing later levels weaker gates.
 
+### Hazards — built
+
+A hazard is a pit punched out of the middle of the lane. The corridor returns **two spans**
+around it and the player commits to one. That is phase 10's fork machinery arriving early,
+and it was the only honest option: a render-capped crowd is 440 wide against a 720 lane and
+is clamped to stay inside it, so it always covers the centre line. Anything central is
+unavoidable unless a real gap is opened either side of it.
+
+Stored as two more sampled arrays beside `centre`/`halfWidth`. A zero-width hole is a strict
+no-op, which is what kept the ten hazard-free levels' win rates identical to the digit.
+
+**A general fork is still phase 10.** This works only because red pursuit is positional —
+reds intercept the squad wherever it is and the spawn bias already tracks `anchorX` — so
+adjacent, short-lived branches need no per-branch swarm logic. Long, widely separated
+branches still do.
+
+The toll for standing in a pit is proportional to the crowd, so it means something at every
+squad size. It never caps growth the way an undodgeable proportional source would, because
+a pit can be steered around.
+
+**Hazards are a real skill test, and establishing that took three measurements, two of them
+wrong.** The fair comparison is one player against itself:
+
+| Reference player | Toll, as % of peak squad | Win rate |
+|---|---|---|
+| `obj-light` — ignores pits | 14.2% | 75% |
+| `obj-pit` — same player, routes around them | **0.8%** | 63% |
+
+Routing around a pit cuts its toll seventeen-fold. It also costs pickups, so paying the
+toll and keeping the objectives is often the *better* play — which is what makes a pit a
+decision rather than a rule.
+
+The two discarded measurements are worth recording, because both looked convincing:
+
+- A first run showed a dodging strategy paying 3.7% against 15.5%. That was measured
+  against broken geometry: `holeCentre` was left at zero wherever a hole was closed, so
+  interpolating into an open sample swept the pit in from the left lane edge instead of
+  growing it in place. Seeding the array to the lane's centre fixed it.
+- The corrected run showed the dodger paying *more* (18.7%), which read as the skill being
+  fake. It was not: that strategy threads pits perfectly — zero overlap, zero bodies — and
+  then starves, because dodging was all it did. Toll as a share of peak squad flatters
+  nobody who dies before they have a crowd to lose.
+
+The crowd also reads the lane `SQUEEZE_LOOKAHEAD` ahead rather than underfoot, so it funnels
+down before the lip arrives. Without that the pit opened beneath a full-width formation and
+took its cut before anyone could be narrow — an unavoidable toll wearing a skill test's
+clothes.
+
 ### Corridor — built
 
 `LANE_W` stays fixed at 720 as the virtual coordinate space. The *drivable span* within it
@@ -181,15 +230,14 @@ below it.
 | 4 | ~~Enemy types~~ | **Done.** Per-unit HP, damage-pool bullets, grunt/runner/brute/exploder, per-type batching | Me |
 | 5 | ~~Level system~~ | **Done.** `LevelDef`, template generators, finish line, win/lose, level select, campaign flow | Split |
 | 6a | ~~Corridor~~ | **Done.** Corridor over worldY, narrowing, pinches and bends; crowd compression | Me |
-| 6b | Hazards | Static hazards that split the crowd — where narrow sections get their teeth | Me |
+| 6b | ~~Hazards~~ | **Done.** Pits that split the corridor into two spans; proportional toll for standing in one | Me |
 | 7 | Structures | New objective kinds: turrets to free, barricades that must be broken to pass | Sonnet |
 | 8 | Juice + audio | Screen shake, hit flash, damage popups, synthesized SFX, no audio files | Sonnet |
 | 9 | Content pass | 20 levels generated, measured and tuned against the probe | Me |
 | 10 | Forks | Corridor returning multiple spans; only if levels feel same-y without it | Me |
 
-**Phase 6b is next.** The corridor gives a narrow lane its shape but not its danger, and
-the measurements above say plainly that shape alone makes a level slightly easier. Hazards
-are what make threading a gap cost something.
+**Phase 7 is next.** Turrets to free and barricades to break are the last content system
+before the campaign is extended.
 
 Phase 9 now inherits a working per-level harness rather than building one, and extends the
 campaign from twelve levels to twenty.
@@ -236,9 +284,16 @@ Two findings came straight out of using it:
 - **Generated levels can feel samey.** Templates plus seeds trade authorial control for
   volume. If level 9 and level 14 play the same, the fix is more templates, not more seeds.
 - **Lane shape may not be worth its complexity.** It measurably does not change difficulty,
-  so it has to earn its place on how it looks and how it plays under the thumb. If a pinch
-  is not interesting to steer through once hazards are in it, the corridor is an expensive
-  backdrop.
+  so it has to earn its place on how it looks and how it plays under the thumb. Hazards have
+  since given a narrow lane something to do, but the pinch itself is still decoration.
+- **Dodging a pit may simply be the wrong play.** Routing around one costs more win rate
+  than the toll does (63% against 75%), so a player who learns to dodge perfectly is
+  playing worse. That is a fine trade only if the margin is narrow enough to stay a
+  judgement call; if hazards get harsher, dodging has to start winning.
+- **Two of the three hazard measurements were wrong before they were right.** Both wrong
+  ones were plausible and pointed opposite ways. Any future claim that a mechanic does or
+  does not reward skill needs the same treatment: one player against itself, differing in
+  exactly one habit.
 - **Forks fight the spawn model.** Reds spawn biased toward the squad's column and the
   anchor clamps to one span; a fork means deciding what the swarm does on the path not
   taken. This is why forks are last and conditional.

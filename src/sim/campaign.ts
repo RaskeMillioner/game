@@ -58,6 +58,12 @@ export const CAMPAIGN: readonly LevelDef[] = [
     // through the middle, so the crowd is thinnest exactly where the tide
     // thickens.
     corridor: { shape: 'pinch', tightness: 0.46, at: 0.5, span: 0.26 },
+    // Ahead of the pinch, in open lane, where there is room to pick a side
+    // without also fighting the walls.
+    hazards: [
+      { at: 0.30, span: 0.16, halfWidth: 110 },
+      { at: 0.72, span: 0.14, halfWidth: 100 },
+    ],
   },
   {
     id: 5,
@@ -121,6 +127,12 @@ export const CAMPAIGN: readonly LevelDef[] = [
     // Longer and tighter than THE PRESS, and it swings while it squeezes:
     // the lane you are threading is also moving under you.
     corridor: { shape: 'bend', tightness: 0.42, sway: 0.42, at: 0.52, span: 0.46 },
+    // Two, either side of the bend's tightest point: commit to a side, then
+    // commit again with the lane swinging under you.
+    hazards: [
+      { at: 0.34, span: 0.15, halfWidth: 120 },
+      { at: 0.70, span: 0.15, halfWidth: 120 },
+    ],
   },
   {
     id: 11,
