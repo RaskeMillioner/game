@@ -4,7 +4,7 @@ import {
   ANCHOR_FOLLOW, BLUE_FOLLOW, BREAKTHROUGH_PAD, BULLET_RADIUS, BULLET_RANGE, CONTACT_PAD, CORPSE_LIFE,
   FIRE_COLUMN_FILL, FIRE_FAN_REF, LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
   RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_EDGE_PAD, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
-  HAZARD_RATE, SQUEEZE_LOOKAHEAD, START_BLUE, WEAPONS,
+  HAZARD_RATE, SQUEEZE_LOOKAHEAD, START_BLUE, TURRET_BULLET_DAMAGE, TURRET_BULLET_SPEED, TURRET_FIRE_RATE, TURRET_RANGE, WEAPONS,
 } from './config.js';
 import { ENEMIES, ENEMY_KINDS } from './enemies.js';
 import {
@@ -16,6 +16,7 @@ import { buildLevel, LevelDef, SpawnWave } from './levels.js';
 import {
   collectObjective, damageObjective, Objective, OBJECTIVE_H, OBJECTIVE_W, PICKUP_PAD,
 } from './objectives.js';
+import { Barricade, damageBarricade } from './barricades.js';
 
 /**
  * `won` is reached by crossing the level's finish line, `dead` by losing the
@@ -65,6 +66,9 @@ export class World {
   private hazardDebt = 0;
   gates: Gate[];
   objectives: Objective[];
+  barricades: Barricade[];
+  /** Kills credited to turrets rather than the squad. */
+  turretKills = 0;
   /** World position of the finish line. Infinite on an endless level. */
   readonly finishY: number;
   /** The drivable lane. Steering, spawning and the renderer all read it. */
@@ -92,6 +96,8 @@ export class World {
   readonly bulLife = new Float32Array(MAX_BULLET);
   /** Damage pool. A bullet spends it across the reds it passes through. */
   readonly bulDmg = new Float32Array(MAX_BULLET);
+  /** Non-zero for bullets fired by a turret rather than the squad. */
+  readonly bulFromTurret = new Uint8Array(MAX_BULLET);
 
   corpseHead = 0;
   readonly corpseX = new Float32Array(MAX_CORPSE);
@@ -122,6 +128,7 @@ export class World {
     this.waves = plan.waves;
     this.gates = plan.gates;
     this.objectives = plan.objectives;
+    this.barricades = plan.barricades;
     this.finishY = plan.finishY;
     this.corridor = plan.corridor;
     this.anchorX = centreAt(this.corridor, this.anchorY);
@@ -202,13 +209,16 @@ export class World {
     this.spawnReds();
     this.stepReds(dt);
     this.stepFiring(dt);
+    this.stepTurrets(dt);
     this.stepBullets(dt);
     this.grid.rebuild(this.redCount, this.redX, this.redY, -100, this.cameraY - 200);
     this.collideBullets();
     this.collideObjectives();
+    this.collideBarricades();
     this.collideSquad();
     this.resolveObjectives();
     this.stepHazard(dt);
+    this.stepBarricades(dt);
     this.stepCorpses(dt);
 
     if (this.count <= 0) {
@@ -499,6 +509,7 @@ export class World {
     this.bulVY[i] = this.bulVY[last];
     this.bulLife[i] = this.bulLife[last];
     this.bulDmg[i] = this.bulDmg[last];
+    this.bulFromTurret[i] = this.bulFromTurret[last];
   }
 
   private collideBullets(): void {
@@ -535,6 +546,7 @@ export class World {
         this.addCorpse(this.redX[r], this.redY[r], true);
         this.kills++;
         this.killsByType[this.redType[r]]++;
+        if (this.bulFromTurret[i]) this.turretKills++;
       }
       if (dmg !== this.bulDmg[i]) {
         this.bulDmg[i] = dmg;
@@ -627,6 +639,54 @@ export class World {
         this.count = 0;
         return;
       }
+    }
+  }
+
+  /**
+   * Fires turrets that are active (broken, in range, not yet resolved). Turret
+   * bullets are flat-damage and do not spend from the squad's emitter budget.
+   */
+  private stepTurrets(dt: number): void {
+    for (const o of this.objectives) {
+      if (o.kind !== 'turret' || !o.broken || o.resolved) continue;
+      if (Math.abs(this.anchorY - o.y) > TURRET_RANGE) continue;
+      o.fireTimer += dt;
+      const interval = 1 / TURRET_FIRE_RATE;
+      while (o.fireTimer >= interval) {
+        o.fireTimer -= interval;
+        if (this.bulletCount >= MAX_BULLET) break;
+        const j = this.bulletCount++;
+        this.bulX[j] = o.x;
+        this.bulY[j] = o.y;
+        this.bulVX[j] = 0;
+        this.bulVY[j] = TURRET_BULLET_SPEED;
+        this.bulLife[j] = BULLET_RANGE / TURRET_BULLET_SPEED;
+        this.bulDmg[j] = TURRET_BULLET_DAMAGE;
+        this.bulFromTurret[j] = 1;
+      }
+    }
+  }
+
+  /** Bullets (non-turret) that enter a live barricade's span damage it. */
+  private collideBarricades(): void {
+    for (const b of this.barricades) {
+      if (b.broken) continue;
+      for (let i = 0; i < this.bulletCount; i++) {
+        if (this.bulFromTurret[i]) continue;
+        if (Math.abs(this.bulY[i] - b.y) > b.yHalf) continue;
+        if (Math.abs(this.bulX[i] - b.holeCentre) > b.holeHalfWidth) continue;
+        const dmg = this.bulDmg[i];
+        this.removeBullet(i);
+        i--;
+        damageBarricade(b, this.corridor, dmg);
+        if (b.broken) break;
+      }
+    }
+  }
+
+  private stepBarricades(dt: number): void {
+    for (const b of this.barricades) {
+      if (b.flash > 0) b.flash = Math.max(0, b.flash - dt / 0.4);
     }
   }
 

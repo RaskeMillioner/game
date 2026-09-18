@@ -136,6 +136,38 @@ function objectivePitSeeker(commit: number): Strategy {
   };
 }
 
+/**
+ * Steers into the barricade's centre to break it, then falls back to normal
+ * objective play. Tests whether breaking the wall is worth the fire diverted.
+ */
+function barricadeShooter(commit: number): Strategy {
+  const fallback = objectiveSeeker(commit);
+  return (w, t) => {
+    const b = w.barricades.find((x) => !x.broken && x.y > w.anchorY - 50);
+    if (b && b.y - w.anchorY < commit) {
+      w.targetX = b.holeCentre;
+      return;
+    }
+    fallback(w, t);
+  };
+}
+
+/**
+ * Same as `obj-light` but ignores turret objectives — measures turret value
+ * by comparing against the strategy that takes everything else.
+ */
+function noTurret(commit: number): Strategy {
+  const fallback = gateSeeker(true);
+  return (w, t) => {
+    const o = w.objectives.find((x) => x.kind !== 'turret' && !x.resolved && x.y > w.anchorY - 50);
+    if (o && o.y - w.anchorY < commit) {
+      w.targetX = o.x;
+      return;
+    }
+    fallback(w, t);
+  };
+}
+
 const strategies: Record<string, Strategy> = {
   passive: (w) => { w.targetX = LANE_W / 2; },
   optimal: gateSeeker(true),
@@ -145,11 +177,14 @@ const strategies: Record<string, Strategy> = {
   'obj-light': objectiveSeeker(900),
   'pit-aware': pitAware(900),
   'obj-pit': objectivePitSeeker(900),
+  'barricade-shoot': barricadeShooter(900),
+  'no-turret': noTurret(900),
 };
 
 interface Result {
   seconds: number; kills: number; peak: number; died: boolean; won: boolean;
   broken: number; passed: number; leak: number; hazard: number;
+  turretKills: number;
   leaksByType: number[]; killsByType: number[]; contactsByType: number[];
 }
 
@@ -182,6 +217,7 @@ function runLevel(strategy: Strategy, level: LevelDef): Result {
     passed: seen.length,
     leak: w.kills + w.leaked > 0 ? w.leaked / (w.kills + w.leaked) : 0,
     hazard: w.hazardLosses,
+    turretKills: w.turretKills,
     leaksByType: Array.from(w.leaksByType),
     killsByType: Array.from(w.killsByType),
     contactsByType: Array.from(w.contactsByType),
@@ -347,4 +383,53 @@ for (const name of ['passive', 'obj-light', 'obj-pit', 'pit-aware'] as const) {
     `${name.padEnd(14)} ${(lost / runs).toFixed(0).padStart(7)} ` +
     `${((lost / peak) * 100).toFixed(1).padStart(13)}% ${((won / runs) * 100).toFixed(0).padStart(6)}%`,
   );
+}
+
+/**
+ * Turret value: does flipping a turret contribute meaningfully to clearing
+ * the level? Measures turret kills and win rate on level 7, which has them,
+ * against a strategy that ignores them.
+ */
+console.log('\nturret value (level 7)');
+console.log('strategy        turret kills   win%');
+{
+  const level7 = CAMPAIGN.find((l) => l.id === 7)!;
+  for (const name of ['obj-light', 'no-turret'] as const) {
+    let tKills = 0;
+    let won = 0;
+    const runs = 20;
+    for (let i = 0; i < runs; i++) {
+      const r = runLevel(strategies[name] as Strategy, { ...level7, seed: (level7.seed + i * 2654435761) >>> 0 });
+      tKills += r.turretKills;
+      if (r.won) won++;
+    }
+    console.log(
+      `${name.padEnd(14)} ${(tKills / runs).toFixed(1).padStart(13)} ${((won / runs) * 100).toFixed(0).padStart(6)}%`,
+    );
+  }
+}
+
+/**
+ * Barricade value: does breaking the wall pay off? Level 10 has one.
+ * The barricade-dodge strategy (obj-pit) avoids the hazard; barricade-shoot
+ * breaks it. If shoot wins more than dodge, spending fire on it earns its place.
+ */
+console.log('\nbarricade value (level 10)');
+console.log('strategy           win%   hazard losses');
+{
+  const level10 = CAMPAIGN.find((l) => l.id === 10)!;
+  for (const name of ['obj-light', 'obj-pit', 'barricade-shoot'] as const) {
+    let won = 0;
+    let hazard = 0;
+    const runs = 20;
+    for (let i = 0; i < runs; i++) {
+      const r = runLevel(strategies[name] as Strategy, { ...level10, seed: (level10.seed + i * 2654435761) >>> 0 });
+      if (r.won) won++;
+      hazard += r.hazard;
+    }
+    console.log(
+      `${name.padEnd(18)} ${((won / runs) * 100).toFixed(0).padStart(5)}%` +
+      ` ${(hazard / runs).toFixed(0).padStart(14)}`,
+    );
+  }
 }

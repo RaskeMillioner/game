@@ -93,7 +93,7 @@ export const CAMPAIGN: readonly LevelDef[] = [
     difficulty: 0.85,
     length: 18000,
     mix: { [GRUNT]: 1, [RUNNER]: 0.35, [EXPLODER]: 0.09, [BRUTE]: 0.05 },
-    structures: DEFAULT_STRUCTURES,
+    structures: { ...DEFAULT_STRUCTURES, turretFirst: 5500, turretSpacing: 5000 },
   },
   {
     id: 8,
@@ -132,6 +132,9 @@ export const CAMPAIGN: readonly LevelDef[] = [
     hazards: [
       { at: 0.34, span: 0.15, halfWidth: 120 },
       { at: 0.70, span: 0.15, halfWidth: 120 },
+    ],
+    barricades: [
+      { at: 0.52, span: 0.06, halfWidth: 160, hp: 600 },
     ],
   },
   {

@@ -37,6 +37,11 @@ export interface HazardSpec {
   readonly offset?: number;
 }
 
+/** A barricade is a hazard with hit points — shoot it and the hole closes. */
+export interface BarricadeSpec extends HazardSpec {
+  readonly hp: number;
+}
+
 export interface CorridorSpec {
   readonly shape: CorridorShape;
   /**
@@ -343,6 +348,28 @@ export function hazardOverlap(c: Corridor, y: number, x: number, rx: number): nu
   const b = Math.max(-1, Math.min(1, (hi - x) / rx));
   const area = (t: number): number => t * Math.sqrt(1 - t * t) + Math.asin(t);
   return (area(b) - area(a)) / Math.PI;
+}
+
+/** First and last sample indices that cover the hazard's y span. */
+export function barricadeToSampleRange(
+  spec: HazardSpec,
+  length: number,
+  step: number,
+): [lo: number, hi: number] {
+  const half = spec.span / 2;
+  return [
+    Math.max(0, Math.floor(((spec.at - half) * length) / step)),
+    Math.ceil(((spec.at + half) * length) / step),
+  ];
+}
+
+/** Zeroes the hole samples in [lo, hi], collapsing a broken barricade. */
+export function clearBarricadeHole(c: Corridor, lo: number, hi: number): void {
+  const len = c.holeHalfWidth.length;
+  for (let i = Math.max(0, lo); i <= Math.min(len - 1, hi); i++) {
+    c.holeHalfWidth[i] = 0;
+    c.holeCentre[i] = c.centre[i];
+  }
 }
 
 /** True if this corridor is the full lane everywhere, unsplit — the no-op case. */
