@@ -223,6 +223,90 @@ looser than a half-width of ~232 squeezes nothing at all. The first THE PRESS bo
 at 231 and was pure scenery. `SQUEEZE_THRESHOLD` and a test now hold every shaped level
 below it.
 
+### Structures — designed, not built
+
+Phase 7 adds two kinds of thing to the lane: a **barricade**, which is in your way, and a
+**turret**, which is on your side once you have paid for it. Neither is built. What follows
+is the spec the implementing session works from, and the alternatives it beat.
+
+#### A barricade is a pit you are allowed to fill in
+
+A barricade is specified exactly as a hazard is and baked into the same `holeCentre` /
+`holeHalfWidth` sample arrays. Every consumer that already copes with a split corridor —
+the anchor clamp, red spawning, `spanHalfWidthAt`, the crowd squeeze, the renderer's ground
+edges — copes with a barricade without a line of new code. The difference is hit points:
+shoot it enough and its hole collapses to zero, and the lane is whole again by the time the
+squad arrives.
+
+The decision it poses is **spend fire, or spend position.** Shooting the wall is shooting
+away from the swarm, exactly as a crate is. Not shooting it means committing to one of the
+two spans beside it — the pit decision — and giving up whatever sits behind it on the other
+side.
+
+The obvious reading, a wall that stops the squad dead until it is broken, was rejected on
+architecture rather than taste. `cameraY` advances at a constant `SCROLL_SPEED`, and every
+spawn wave, gate and crate is keyed to `y`. A wall that halts the squad makes scroll
+variable, which invalidates wave pacing, the probe's timing, the hazard toll and the finish
+clock in one move. That is a phase of its own, not a structure kind.
+
+Three constraints the build has to respect:
+
+- **Neither span may close below `MIN_SPAN_HALF`.** The floor a pit already respects. A
+  barricade wide enough to breach it is unwinnable rather than hard.
+- **Breaking one mutates the corridor.** This is the genuinely invasive part, and it is
+  worth saying plainly: everything phase 6 wrote assumes the samples are baked at
+  generation and never touched again. The cheapest honest shape is for each barricade to
+  record the sample range it wrote and, on breaking, rewrite that range to zero.
+  `isStraight` and the no-op guarantee must survive it.
+- **Partial damage buys nothing.** A hole that narrows as it takes hits was considered and
+  rejected: it makes the toll continuous and the decision mushy. Break it or don't.
+
+#### A turret is a second firing line you have to stand near
+
+Shoot a turret to flip it friendly. It then fires forward from its own `x` for as long as
+the squad is in range, and is left behind when you pass it. No steering state, no formation
+attachment, no new bullet machinery.
+
+Two numbers decide whether it is worth having:
+
+- **Its damage is flat, not squad-derived.** Squad damage scales with the crowd; a turret
+  scaled the same way would be nothing to a small squad and a rounding error to a large one
+  — the worst of both. Flat damage makes a turret worth most to a player who has been
+  mauled, which is a role nothing else in the game fills.
+- **It sits off-centre, like every other objective.** Standing where the turret covers means
+  standing where your own fire does not. That is the verb the whole game runs on, and it is
+  the only thing keeping a turret from being a weapon crate with a new label.
+
+`MAX_EMITTERS` is 26 and belongs to the squad's firing line. A turret's emitters come out of
+a separate budget or a turret quietly steals columns from the crowd it is supposed to help.
+
+#### The data
+
+```ts
+interface StructureSpec {
+  // existing: gateFirst, gateSpacing, objectiveFirst, objectiveSpacing
+  turretFirst?: number;
+  turretSpacing?: number;
+}
+
+interface LevelDef {
+  // existing: ..., corridor?, hazards?
+  barricades?: readonly BarricadeSpec[];   // HazardSpec plus hp
+}
+```
+
+Turrets are a new `ObjectiveKind`, not a new system: shootable, off-centre, resolved as the
+squad draws level with them, which is the `Objective` lifecycle exactly. Barricades are
+deliberately *not* objectives — they are corridor data that happens to have hp, and filing
+them under objectives would put two systems in charge of one hole.
+
+**Absent means strictly absent.** A level naming neither field is bit-identical to today,
+held by an explicit test rather than by assumption — the same discipline that let ten of
+twelve levels keep their measured win rates through phase 6.
+
+Three or four levels gain content, not twelve: a mid-campaign level gets a turret pair, a
+late one gets a barricade in a stretch the corridor already narrows. Only those are retuned.
+
 ## 4. Phases
 
 | # | Phase | Output | Owner |
@@ -236,8 +320,10 @@ below it.
 | 9 | Content pass | 20 levels generated, measured and tuned against the probe | Me |
 | 10 | Forks | Corridor returning multiple spans; only if levels feel same-y without it | Me |
 
-**Phase 7 is next.** Turrets to free and barricades to break are the last content system
-before the campaign is extended.
+**Phase 7 is next**, and is specified above rather than left to the implementer: a
+barricade is a hazard with hit points, a turret is a static friendly emitter, and a level
+that names neither is unchanged to the digit. It is the last content system before the
+campaign is extended.
 
 Phase 9 now inherits a working per-level harness rather than building one, and extends the
 campaign from twelve levels to twenty.
@@ -270,6 +356,23 @@ Two findings came straight out of using it:
   `brute-wall` reaches at 0.67. The campaign's ramp is the win-rate column, not the
   difficulty column.
 
+### What phase 7 needs it to measure
+
+Three additions, each shaped the way phase 6's hazard claim eventually had to be — one
+reference player against itself, differing in exactly one habit:
+
+1. A turret-seeking strategy against `obj-light`. Same priorities, one extra detour. If the
+   two cannot be told apart, a turret is not a decision.
+2. `barricade-shoot` against `barricade-dodge`. Does breaking the wall beat threading the
+   gap beside it? If dodging always wins, the hp is wrong; if shooting always wins, the wall
+   is scenery.
+3. Turret damage in the attribution table, so "a turret is a comeback tool" is a column
+   rather than a hope.
+
+**Two of phase 6's three hazard measurements were wrong before they were right, and both
+wrong ones were plausible.** That is now a standing rule, not an anecdote: no phase 7 claim
+about skill counts until it has survived the same treatment.
+
 ## 6. Risks
 
 - ~~**Phase 4 invalidates the current balance.**~~ It did, and the probe re-derived it. The
@@ -300,6 +403,19 @@ Two findings came straight out of using it:
 - **A tuned win rate is not a fun level.** Every level now sits inside its target band, which
   says only that a scripted reference player clears it about as often as intended. Whether
   level 11 is *fun* is not something the probe can answer, and nothing but playtest will.
+- **A breakable corridor is a mutable corridor.** Every line phase 6 wrote assumes the
+  samples are baked at generation. Barricades are the one place phase 7 can break a system
+  that currently works.
+- **A turret may simply be a weapon crate.** Both are shot, both sit off-centre, both reward
+  standing somewhere awkward. If the probe cannot separate a turret level from a crate
+  level, the answer is to cut turrets, not to buff them.
+- **Barricade hp is the dangerous number**, the way exploder weight is dangerous in a mix.
+  Too low and the wall is scenery; too high and dodging is always correct and the wall is a
+  pit with extra steps.
+- **Phase 7 adds no pressure, only tools.** Every structure in it is net player-positive, so
+  the levels that gain content will drift up the win-rate ramp and need their difficulty
+  lifted. That lift has to come from the enemies — handing a level weaker gates to
+  compensate would break the rule that a level's growth curve is the same every time.
 
 ## 7. Open question for the next playtest
 
@@ -313,3 +429,8 @@ A second one, now that they exist: **do the templates read as different levels, 
 same level at different densities?** `runner-rush` and `brute-wall` diverge on the probe's
 leak column — 1.8% against 4.7% — but that is a measurement, not a feeling. If they play the
 same, the fix is more templates, not more seeds.
+
+A third, for when phase 7 lands: **does a turret read as a different reward from a crate?**
+The probe can say whether it changes the win rate. It cannot say whether flipping a gun to
+your side feels like anything other than opening a box, and that is the whole case for
+building it.
