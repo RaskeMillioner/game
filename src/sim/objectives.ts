@@ -1,5 +1,7 @@
 import { Rng } from '../core/rng.js';
 import { LANE_W, MAX_BLUE, WEAPONS } from './config.js';
+import { centreAt, Corridor, halfWidthAt } from './corridor.js';
+import { clearOfHole } from './gates.js';
 
 export type ObjectiveKind = 'weapon' | 'recruit';
 
@@ -106,6 +108,7 @@ export function buildObjectives(
   gateYs: readonly number[] = [],
   first: number = OBJECTIVE_FIRST,
   spacing: number = OBJECTIVE_SPACING,
+  corridor?: Corridor,
 ): Objective[] {
   const out: Objective[] = [];
   /** Pushes an objective clear of any gate it would otherwise sit on top of. */
@@ -122,13 +125,23 @@ export function buildObjectives(
     // Weapons are now the only route to a better gun, so crates alternate with
     // pods rather than competing with a third structure for lane space.
     const kind: ObjectiveKind = i % 3 === 0 ? 'weapon' : 'recruit';
-    const side = rng.next() < 0.5 ? 0.22 : 0.78;
+    const side = rng.next() < 0.5 ? -1 : 1;
     const hp = 240 + i * 240;
     const value = kind === 'weapon' ? 1 : 55 + i * 48;
+    const y = clearOfGates(first + i * spacing);
+    // Offset to one side of the lane it actually stands in. On a straight lane
+    // 0.56 of the half-width is LANE_W * 0.22 and * 0.78 exactly, so this is
+    // unchanged there; in a pinch it stays reachable instead of sitting in the
+    // wall.
+    const centre = corridor ? centreAt(corridor, y) : LANE_W / 2;
+    const half = corridor ? halfWidthAt(corridor, y) : LANE_W / 2;
+    const x = corridor
+      ? clearOfHole(corridor, y, centre + side * half * 0.56, OBJECTIVE_W / 2, centre, half)
+      : centre + side * half * 0.56;
     out.push({
       kind,
-      x: LANE_W * side,
-      y: clearOfGates(first + i * spacing),
+      x,
+      y,
       maxHp: hp,
       hp,
       value,

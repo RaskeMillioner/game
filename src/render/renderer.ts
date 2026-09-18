@@ -1,6 +1,9 @@
 import {
   BULLET_RADIUS, CORPSE_LIFE, LANE_W, MAX_BLUE_RENDER, MAX_CORPSE, WEAPONS,
 } from '../sim/config.js';
+import {
+  Corridor, holeCentreAt, holeHalfWidthAt, leftAt, rightAt,
+} from '../sim/corridor.js';
 import { ENEMIES, ENEMY_KINDS } from '../sim/enemies.js';
 import { type Gate, GATE_PANEL_W, gateIsGood, gateLabel } from '../sim/gates.js';
 import {
@@ -30,6 +33,13 @@ const COL_BULLET = '#ffe066';
 const COL_CORPSE = '#2a1a22';
 const COL_SKY_TOP = '#0a0a10';
 const COL_SKY_HORIZON = '#20212f';
+
+/**
+ * How many samples the corridor's edges are drawn with. Spaced quadratically
+ * in depth, so the near ground — which is most of the screen — gets most of
+ * them.
+ */
+const GROUND_STEPS = 32;
 
 const STRIPE = 200;
 const STRIPE_THICK = 42;
@@ -70,6 +80,9 @@ const FINISH_POST_H = 260;
 const FINISH_POST_W = 16;
 const COL_WIN = '#43d9a3';
 const COL_LOCKED = '#2a2a36';
+/** Hazards read as a hole in the ground rather than an object standing on it. */
+const COL_HAZARD = '#120a10';
+const COL_HAZARD_EDGE = '#c2384f';
 
 /**
  * Draws the whole world with a fixed, tiny number of fill calls: one path per
@@ -118,8 +131,8 @@ export class Renderer {
     proj.update(w.cameraY, w.anchorX, viewH);
 
     this.drawSky();
-    this.drawGround(viewH);
-    this.drawStripes();
+    this.drawGround(w.corridor, viewH);
+    this.drawStripes(w.corridor);
     this.drawStructures(w);
     this.drawCorpses(w);
     this.drawCrowds(w);
@@ -147,17 +160,18 @@ export class Renderer {
     const ctx = this.ctx;
     // `project` returns a single reused object, so every corner is read out
     // into scalars before the next call overwrites it.
-    const near = proj.project(0, w.finishY);
+    const near = proj.project(leftAt(w.corridor, w.finishY), w.finishY);
     const nearLX = near.x;
     const nearLY = near.y;
     const nearScale = near.scale;
-    const nearRight = proj.project(LANE_W, w.finishY);
+    const nearRight = proj.project(rightAt(w.corridor, w.finishY), w.finishY);
     const nearRX = nearRight.x;
     const nearRY = nearRight.y;
-    const far = proj.project(0, w.finishY + FINISH_DEPTH);
+    const farY = w.finishY + FINISH_DEPTH;
+    const far = proj.project(leftAt(w.corridor, farY), farY);
     const farLX = far.x;
     const farLY = far.y;
-    const farRight = proj.project(LANE_W, w.finishY + FINISH_DEPTH);
+    const farRight = proj.project(rightAt(w.corridor, farY), farY);
     const farRX = farRight.x;
     const farRY = farRight.y;
 
@@ -206,40 +220,135 @@ export class Renderer {
     ctx.fillRect(0, horizonY - glowH, LANE_W, glowH);
   }
 
-  /** Ground trapezoid: lane edges converge to the single vanishing point at the horizon. */
-  private drawGround(viewH: number): void {
+  /**
+   * The ground the squad can actually drive on, sampled along the corridor.
+   *
+   * This used to be one trapezoid between the lane's two fixed edges. A lane
+   * that narrows and bends has no such shape, so the edges are walked instead:
+   * samples are spaced quadratically in depth, which puts them where the
+   * projection is changing fastest — near the camera, where a handful of world
+   * units is most of the screen.
+   */
+  // One extra slot per edge for the vanishing point they both end at.
+  private readonly groundLX = new Float32Array(GROUND_STEPS + 2);
+  private readonly groundLY = new Float32Array(GROUND_STEPS + 2);
+  private readonly groundRX = new Float32Array(GROUND_STEPS + 2);
+  private readonly groundRY = new Float32Array(GROUND_STEPS + 2);
+
+  private drawGround(corridor: Corridor, viewH: number): void {
     const ctx = this.ctx;
     const proj = this.projector;
     const horizonY = proj.horizonY;
 
-    // Fill everything below the horizon first so the corners outside the
-    // (narrower, converging) lane trapezoid aren't left as gaps.
+    // Fill everything below the horizon first so the ground outside the
+    // (narrower, converging) corridor isn't left as a gap.
     ctx.fillStyle = COL_BG;
     ctx.fillRect(0, horizonY, LANE_W, Math.max(0, viewH - horizonY));
 
     const scaleBottom = Math.max((viewH - horizonY) / CAM_HEIGHT, FOCAL / FAR_DZ);
     const dzBottom = Math.max(NEAR, FOCAL / scaleBottom);
-    const worldYBottom = proj.camY + dzBottom;
-    const left = proj.project(0, worldYBottom);
-    const leftX = left.x;
-    const leftY = left.y;
-    const right = proj.project(LANE_W, worldYBottom);
+
+    const lx = this.groundLX;
+    const ly = this.groundLY;
+    const rx = this.groundRX;
+    const ry = this.groundRY;
+    for (let i = 0; i <= GROUND_STEPS; i++) {
+      const f = i / GROUND_STEPS;
+      const dz = dzBottom + (FAR_DZ - dzBottom) * f * f;
+      const worldY = proj.camY + dz;
+      // Each projection is read out immediately: `project` hands back one
+      // reused record, so holding two of them means holding the same point.
+      const l = proj.project(leftAt(corridor, worldY), worldY);
+      lx[i] = l.x;
+      ly[i] = l.y;
+      const r = proj.project(rightAt(corridor, worldY), worldY);
+      rx[i] = r.x;
+      ry[i] = r.y;
+    }
+    // Both edges end at the vanishing point. Stopping at the last sample instead
+    // leaves the lane cut off by a flat far edge partway up the screen, where
+    // the trapezoid this replaced used to taper away to nothing.
+    const end = GROUND_STEPS + 1;
+    lx[end] = LANE_W / 2;
+    ly[end] = horizonY;
+    rx[end] = LANE_W / 2;
+    ry[end] = horizonY;
 
     ctx.fillStyle = COL_LANE;
     ctx.beginPath();
-    ctx.moveTo(leftX, leftY);
-    ctx.lineTo(right.x, right.y);
-    ctx.lineTo(LANE_W / 2, horizonY);
+    ctx.moveTo(lx[0], ly[0]);
+    for (let i = 1; i <= end; i++) ctx.lineTo(lx[i], ly[i]);
+    for (let i = end; i >= 0; i--) ctx.lineTo(rx[i], ry[i]);
     ctx.closePath();
     ctx.fill();
 
     ctx.strokeStyle = COL_EDGE;
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(leftX, leftY);
-    ctx.lineTo(LANE_W / 2, horizonY);
-    ctx.moveTo(right.x, right.y);
-    ctx.lineTo(LANE_W / 2, horizonY);
+    ctx.moveTo(lx[0], ly[0]);
+    for (let i = 1; i <= end; i++) ctx.lineTo(lx[i], ly[i]);
+    ctx.moveTo(rx[0], ry[0]);
+    for (let i = 1; i <= end; i++) ctx.lineTo(rx[i], ry[i]);
+    ctx.stroke();
+
+    this.drawHazard(corridor, dzBottom);
+  }
+
+  private readonly hazLX = new Float32Array(GROUND_STEPS + 1);
+  private readonly hazLY = new Float32Array(GROUND_STEPS + 1);
+  private readonly hazRX = new Float32Array(GROUND_STEPS + 1);
+  private readonly hazRY = new Float32Array(GROUND_STEPS + 1);
+
+  /**
+   * The hazard, punched out of the ground that was just drawn. Cut from the
+   * lane rather than stood on top of it, so it reads as somewhere you cannot
+   * go instead of as another billboard to shoot.
+   */
+  private drawHazard(corridor: Corridor, dzBottom: number): void {
+    const proj = this.projector;
+    const lx = this.hazLX;
+    const ly = this.hazLY;
+    const rx = this.hazRX;
+    const ry = this.hazRY;
+    let lo = -1;
+    let hi = -1;
+    for (let i = 0; i <= GROUND_STEPS; i++) {
+      const f = i / GROUND_STEPS;
+      const dz = dzBottom + (FAR_DZ - dzBottom) * f * f;
+      const worldY = proj.camY + dz;
+      const hw = holeHalfWidthAt(corridor, worldY);
+      if (hw <= 0) continue;
+      const hc = holeCentreAt(corridor, worldY);
+      // Each projection read straight out into scalars: `project` hands back a
+      // single reused record, which is what broke the finish line in phase 5.
+      const l = proj.project(hc - hw, worldY);
+      lx[i] = l.x;
+      ly[i] = l.y;
+      const r = proj.project(hc + hw, worldY);
+      rx[i] = r.x;
+      ry[i] = r.y;
+      if (lo < 0) lo = i;
+      hi = i;
+    }
+    if (lo < 0 || hi <= lo) return;
+
+    const ctx = this.ctx;
+    ctx.fillStyle = COL_HAZARD;
+    ctx.beginPath();
+    ctx.moveTo(lx[lo], ly[lo]);
+    for (let i = lo + 1; i <= hi; i++) ctx.lineTo(lx[i], ly[i]);
+    for (let i = hi; i >= lo; i--) ctx.lineTo(rx[i], ry[i]);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = COL_HAZARD_EDGE;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(lx[lo], ly[lo]);
+    for (let i = lo + 1; i <= hi; i++) ctx.lineTo(lx[i], ly[i]);
+    ctx.lineTo(rx[hi], ry[hi]);
+    for (let i = hi - 1; i >= lo; i--) ctx.lineTo(rx[i], ry[i]);
+    ctx.closePath();
     ctx.stroke();
   }
 
@@ -249,7 +358,7 @@ export class Renderer {
    * primary "we are moving forward" cue now that the camera itself is fixed
    * relative to the squad.
    */
-  private drawStripes(): void {
+  private drawStripes(corridor: Corridor): void {
     const ctx = this.ctx;
     const proj = this.projector;
     const path = new Path2D();
@@ -261,16 +370,17 @@ export class Renderer {
       const dzFar = proj.dz(y + STRIPE_THICK);
       if (dzFar < NEAR && dzNear < NEAR) continue;
 
-      const nearL = proj.project(0, y);
+      const far = y + STRIPE_THICK;
+      const nearL = proj.project(leftAt(corridor, y), y);
       const nearLX = nearL.x;
       const nearLY = nearL.y;
-      const nearR = proj.project(LANE_W, y);
+      const nearR = proj.project(rightAt(corridor, y), y);
       const nearRX = nearR.x;
       const nearRY = nearR.y;
-      const farL = proj.project(0, y + STRIPE_THICK);
+      const farL = proj.project(leftAt(corridor, far), far);
       const farLX = farL.x;
       const farLY = farL.y;
-      const farR = proj.project(LANE_W, y + STRIPE_THICK);
+      const farR = proj.project(rightAt(corridor, far), far);
 
       path.moveTo(nearLX, nearLY);
       path.lineTo(nearRX, nearRY);
@@ -606,6 +716,15 @@ export class Renderer {
       pad + 34 * s,
     );
     this.drawProgress(w, pad, s);
+
+    // Standing in a hazard costs bodies every frame, and the crowd is drawn
+    // over the top of it, so the count alone is easy to miss in the moment.
+    if (w.hazardOverlap > 0.02) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = COL_HAZARD_EDGE;
+      ctx.font = `bold ${Math.round(34 * s)}px system-ui, -apple-system, sans-serif`;
+      ctx.fillText('CLEAR THE PIT', this.canvas.width / 2, pad + 190 * s);
+    }
   }
 
   /**

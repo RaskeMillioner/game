@@ -54,6 +54,12 @@ export const RED_SPAWN_SPREAD = 340;
 export const RED_SPAWN_MIN_SPREAD = 95;
 export const RED_SPAWN_RADIUS_GAIN = 1.6;
 export const CONTACT_PAD = 6;
+/**
+ * How far clear of the corridor's edges reds are kept. Without it a wave
+ * clamped into a narrow lane stacks exactly on the boundary, which reads as a
+ * queue against an invisible wall rather than as a swarm.
+ */
+export const RED_SPAWN_EDGE_PAD = 25;
 
 export const MAX_BULLET = 1400;
 export const BULLET_RADIUS = 5;
@@ -124,6 +130,20 @@ export const FIRE_FAN_REF = 520;
 
 export const GATE_SPACING = 3400;
 export const GATE_FIRST = 1250;
+
+/**
+ * Fraction of the crowd lost per second while the whole of it stands inside a
+ * hazard. Scaled by how much actually overlaps, so a graze costs a sliver and
+ * driving straight through costs dearly.
+ */
+export const HAZARD_RATE = 0.55;
+
+/**
+ * How far ahead the crowd reads the lane when deciding how tightly to pack.
+ * 600 units is two and a half seconds of travel — enough to be narrow by the
+ * time a hazard's lip arrives, which is what makes picking a side early pay.
+ */
+export const SQUEEZE_LOOKAHEAD = 600;
 
 export const MAX_CORPSE = 400;
 export const CORPSE_LIFE = 4.0;

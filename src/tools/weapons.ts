@@ -44,7 +44,7 @@ function measure(tier: number, count: number, seeds: number, hp = FULL_HP): Resu
       w.targetX = LANE_W / 2;
       // Rebuild the wall every frame: fixed, saturated, and never dying, so the
       // only variable left is what the volley reaches.
-      const frontage = w.radius * 2 + 260;
+      const frontage = w.radiusX * 2 + 260;
       w.redCount = WALL;
       for (let c = 0; c < WALL_COLS; c++) {
         for (let r = 0; r < WALL_ROWS; r++) {
