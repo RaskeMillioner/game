@@ -210,34 +210,37 @@ export function buildCorridor(
   return { step: CORRIDOR_STEP, centre, halfWidth, holeCentre, holeHalfWidth };
 }
 
-/** Index and blend factor for a world position. Clamps at both ends. */
-function sample(c: Corridor, y: number): { i: number; j: number; f: number } {
+/**
+ * Linearly interpolates one sampled array at a world position, clamped at both
+ * ends. Inlines the index/blend lookup that `centreAt` and its siblings share
+ * rather than handing it back as an allocated `{ i, j, f }` record: this runs
+ * up to a few thousand times a frame (once per red, per accessor), and that
+ * was the GC pressure the typed-array design otherwise exists to avoid.
+ */
+function lerpAt(arr: Float32Array, c: Corridor, y: number): number {
   const last = c.centre.length - 1;
-  if (!(y > 0)) return { i: 0, j: 0, f: 0 };
+  if (!(y > 0)) return arr[0];
   const raw = y / c.step;
-  if (raw >= last) return { i: last, j: last, f: 0 };
+  if (raw >= last) return arr[last];
   const i = raw | 0;
-  return { i, j: i + 1, f: raw - i };
+  const a = arr[i];
+  return a + (arr[i + 1] - a) * (raw - i);
 }
 
 export function centreAt(c: Corridor, y: number): number {
-  const { i, j, f } = sample(c, y);
-  return c.centre[i] + (c.centre[j] - c.centre[i]) * f;
+  return lerpAt(c.centre, c, y);
 }
 
 export function halfWidthAt(c: Corridor, y: number): number {
-  const { i, j, f } = sample(c, y);
-  return c.halfWidth[i] + (c.halfWidth[j] - c.halfWidth[i]) * f;
+  return lerpAt(c.halfWidth, c, y);
 }
 
 export function holeCentreAt(c: Corridor, y: number): number {
-  const { i, j, f } = sample(c, y);
-  return c.holeCentre[i] + (c.holeCentre[j] - c.holeCentre[i]) * f;
+  return lerpAt(c.holeCentre, c, y);
 }
 
 export function holeHalfWidthAt(c: Corridor, y: number): number {
-  const { i, j, f } = sample(c, y);
-  return c.holeHalfWidth[i] + (c.holeHalfWidth[j] - c.holeHalfWidth[i]) * f;
+  return lerpAt(c.holeHalfWidth, c, y);
 }
 
 /**

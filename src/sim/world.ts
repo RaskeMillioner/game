@@ -117,6 +117,8 @@ export class World {
   private readonly lineFront = new Float32Array(MAX_EMITTERS);
   private fireTimer = 0;
   private squadSettled = false;
+  /** Backing field for the `squeeze` getter; refreshed twice per `step()`. */
+  private cachedSqueeze = 1;
 
   constructor(level: LevelDef, viewH: number) {
     this.level = level;
@@ -144,8 +146,20 @@ export class World {
   /**
    * How hard the crowd is currently squeezed by the corridor. 1 in open lane,
    * so everything derived from it is unchanged on a straight level.
+   *
+   * Cached rather than recomputed on every read: `radiusX`, `radiusY`,
+   * `stepSquad`, `seedNewSlots` and `buildFiringLine` all read this within the
+   * same tick, and each read cost five lookahead samples of the corridor.
+   * `step()` refreshes the cache exactly where the live getter used to be
+   * evaluated — once before `stepAnchor` moves `anchorX`, once after — so a
+   * cached read returns the same value the getter would have computed at that
+   * point in the frame.
    */
   get squeeze(): number {
+    return this.cachedSqueeze;
+  }
+
+  private computeSqueeze(): number {
     // The tightest span within sight ahead, not just the one underfoot.
     //
     // Reading only the current position made a hazard an unavoidable toll
@@ -203,7 +217,13 @@ export class World {
     this.anchorY = this.cameraY + this.viewH * SQUAD_SCREEN_FRAC;
     if (this.gateFlash > 0) this.gateFlash = Math.max(0, this.gateFlash - dt);
 
+    // Refreshed once before `stepAnchor` (which reads `radiusX` while `anchorX`
+    // still holds last frame's value) and once after (for every reader for the
+    // rest of the tick), matching the two distinct values the old per-call
+    // getter would have produced at each point.
+    this.cachedSqueeze = this.computeSqueeze();
     this.stepAnchor(dt);
+    this.cachedSqueeze = this.computeSqueeze();
     this.stepSquad(dt);
     this.stepGates();
     this.spawnReds();
@@ -423,12 +443,13 @@ export class World {
     const cols = Math.min(n, MAX_EMITTERS);
     const r = this.radiusX;
     const span = r * 2 || 1;
+    const sq = this.squeeze;
     for (let c = 0; c < cols; c++) {
       this.lineSlot[c] = -1;
       this.lineFront[c] = -Infinity;
     }
     for (let i = 0; i < n; i++) {
-      let c = (((slotX[i] * this.squeeze + r) / span) * cols) | 0;
+      let c = (((slotX[i] * sq + r) / span) * cols) | 0;
       if (c < 0) c = 0;
       else if (c >= cols) c = cols - 1;
       if (slotY[i] > this.lineFront[c]) {
@@ -587,8 +608,11 @@ export class World {
     for (const o of this.objectives) {
       if (o.resolved || o.broken) continue;
       const dy = o.y - this.anchorY;
-      if (dy < -OBJECTIVE_H || dy > 1400) continue;
+      if (dy < -OBJECTIVE_H || dy > BULLET_RANGE) continue;
       for (let i = 0; i < this.bulletCount; i++) {
+        // Turret fire is a reward for flipping one, not free demolition of
+        // whatever else shares its column.
+        if (this.bulFromTurret[i]) continue;
         if (Math.abs(this.bulX[i] - o.x) > halfW) continue;
         if (Math.abs(this.bulY[i] - o.y) > OBJECTIVE_H / 2) continue;
         damageObjective(o, this.bulDmg[i]);
@@ -654,7 +678,12 @@ export class World {
   private stepTurrets(dt: number): void {
     for (const o of this.objectives) {
       if (o.kind !== 'turret' || !o.broken) continue;
-      if (Math.abs(this.anchorY - o.y) > TURRET_RANGE) continue;
+      // Ahead by more than TURRET_RANGE: not yet in range. Behind by more than
+      // the crowd's own depth: the squad has fully passed it, so its bullets
+      // would only be firing forward into empty lane behind the crowd rather
+      // than into the swarm.
+      const ahead = this.anchorY - o.y;
+      if (ahead < -TURRET_RANGE || ahead > this.radiusY) continue;
       o.fireTimer += dt;
       const interval = 1 / TURRET_FIRE_RATE;
       while (o.fireTimer >= interval) {
