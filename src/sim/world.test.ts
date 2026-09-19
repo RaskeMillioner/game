@@ -399,6 +399,128 @@ describe('turrets', () => {
     for (let i = 0; i < 60 && w.state === 'running'; i++) w.step(1 / 60);
     expect(w.turretKills).toBe(frozen);
   }, 20_000);
+
+  /**
+   * Flips the level's first turret and runs until it is inside TURRET_RANGE,
+   * leaving the world one step short of firing. `silence` empties the wave list
+   * and clears the swarm, which is the only way to get a red-free window inside
+   * a real level: spawning happens inside `step`, before the turrets fire.
+   */
+  function armedTurret(silence: boolean) {
+    const level = CAMPAIGN.find((l) => (l.structures.turretFirst ?? 0) > 0)!;
+    const w = new World(level, VIEW_H);
+    const turret = w.objectives.find((o) => o.kind === 'turret')!;
+    turret.hp = 0;
+    turret.broken = true;
+    while (w.anchorY < turret.y - TURRET_RANGE + 50 && w.state === 'running') w.step(1 / 60);
+    w.count = 200;
+    if (silence) {
+      (w as unknown as { waves: readonly unknown[] }).waves = [];
+      w.redCount = 0;
+    }
+    return { w, turret };
+  }
+
+  /** Velocities of the turret bullets emitted by a single step. */
+  function turretShots(w: World, dt = 1 / 60): { vx: number; vy: number }[] {
+    w.bulletCount = 0;
+    w.step(dt);
+    const out: { vx: number; vy: number }[] = [];
+    for (let j = 0; j < w.bulletCount; j++) {
+      if (w.bulFromTurret[j]) out.push({ vx: w.bulVX[j], vy: w.bulVY[j] });
+    }
+    return out;
+  }
+
+  /** Drops a red at (x, y) with enough hp to survive the frame it is shot at. */
+  function plantRed(w: World, x: number, y: number): void {
+    const i = w.redCount++;
+    w.redX[i] = x;
+    w.redY[i] = y;
+    w.redSpeed[i] = 0;
+    w.redOff[i] = 0;
+    w.redType[i] = GRUNT;
+    w.redHp[i] = 1e6;
+  }
+
+  it('aims at a red that is off its own column, not straight up the lane', () => {
+    const { w, turret } = armedTurret(true);
+    plantRed(w, turret.x + 300, turret.y + 120);
+    turret.fireTimer = 1 / 12;
+
+    const shots = turretShots(w);
+    expect(shots.length).toBeGreaterThan(0);
+    // Pointed right and forward, which a fixed forward emitter never is.
+    expect(shots[0].vx).toBeGreaterThan(0);
+    expect(shots[0].vy).toBeGreaterThan(0);
+    expect(Math.hypot(shots[0].vx, shots[0].vy)).toBeCloseTo(1000, 0);
+  }, 20_000);
+
+  it('shoots backwards at a red behind it rather than up an empty lane', () => {
+    const { w, turret } = armedTurret(true);
+    plantRed(w, turret.x, turret.y - 250);
+    turret.fireTimer = 1 / 12;
+
+    const shots = turretShots(w);
+    expect(shots.length).toBeGreaterThan(0);
+    expect(shots[0].vy).toBeLessThan(0);
+  }, 20_000);
+
+  it('picks the nearest red of several', () => {
+    const { w, turret } = armedTurret(true);
+    // Both planted on whichever side of the turret the lane has room for, so
+    // neither is quietly dragged somewhere else by the corridor clamp.
+    const dir = turret.x < LANE_W / 2 ? 1 : -1;
+    plantRed(w, turret.x + dir * 460, turret.y + 80);   // far
+    plantRed(w, turret.x + dir * 120, turret.y + 80);   // near
+    turret.fireTimer = 1 / 12;
+
+    const shots = turretShots(w);
+    expect(shots.length).toBeGreaterThan(0);
+
+    // Work out the nearest red from where the reds actually ended up, then
+    // assert the shot is parallel to it.
+    let bx = 0, by = 0, best = Infinity;
+    for (let i = 0; i < w.redCount; i++) {
+      const dx = w.redX[i] - turret.x;
+      const dy = w.redY[i] - turret.y;
+      const d = Math.hypot(dx, dy);
+      if (d < best) { best = d; bx = dx; by = dy; }
+    }
+    const cross = (shots[0].vx * by - shots[0].vy * bx) / (1000 * best);
+    expect(Math.abs(cross)).toBeLessThan(1e-3);
+  }, 20_000);
+
+  it('holds fire with no target, and does not dump the lull as a burst', () => {
+    const { w, turret } = armedTurret(true);
+
+    // Two full seconds in range with nothing to shoot at.
+    let fired = 0;
+    for (let i = 0; i < 120 && w.state === 'running'; i++) fired += turretShots(w).length;
+    expect(fired).toBe(0);
+
+    // A red arrives: one shot, not twenty-four banked ones.
+    plantRed(w, turret.x + 100, turret.y + 200);
+    expect(turretShots(w).length).toBeLessThanOrEqual(1);
+  }, 20_000);
+
+  it('credits identical turret kills to two worlds built from the same level', () => {
+    const level = CAMPAIGN.find((l) => (l.structures.turretFirst ?? 0) > 0)!;
+    const run = () => {
+      const w = new World(level, VIEW_H);
+      for (const o of w.objectives) {
+        if (o.kind === 'turret') { o.hp = 0; o.broken = true; }
+      }
+      for (let i = 0; i < 3600 && w.state === 'running'; i++) {
+        w.count = Math.max(w.count, 200);
+        w.step(1 / 60);
+      }
+      return w.turretKills;
+    };
+    const a = run();
+    expect(a).toBeGreaterThan(0);
+    expect(run()).toBe(a);
+  }, 30_000);
 });
 
 describe('weapon pickups', () => {

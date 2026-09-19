@@ -27,6 +27,12 @@ export interface Objective {
   collected: boolean;
   /** Firing accumulator for turrets; unused on other kinds. */
   fireTimer: number;
+  /**
+   * Where a turret is currently pointed, in radians, 0 being straight up the
+   * lane. Written by the sim every frame so the renderer can swing the barrel
+   * without repeating the target search.
+   */
+  aimAngle: number;
 }
 
 export const OBJECTIVE_W = 132;
@@ -158,6 +164,7 @@ export function buildObjectives(
       resolved: false,
       collected: false,
       fireTimer: 0,
+      aimAngle: 0,
     });
   }
   return out;
@@ -213,6 +220,7 @@ export function buildTurrets(
       resolved: false,
       collected: false,
       fireTimer: 0,
+      aimAngle: 0,
     });
   }
   return out;

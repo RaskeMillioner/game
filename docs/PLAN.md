@@ -13,7 +13,7 @@ lane has a shape, and it can split around something you have to steer past.
 
 ## 1. Where the code is
 
-Playable and deployed at `raskemillioner.github.io/game/`. 34 kB, 12 kB gzipped, no runtime dependencies.
+Playable and deployed at `raskemillioner.github.io/game/`. 44 kB, 16 kB gzipped, no runtime dependencies.
 
 | Built | Notes |
 |---|---|
@@ -30,9 +30,10 @@ Playable and deployed at `raskemillioner.github.io/game/`. 34 kB, 12 kB gzipped,
 | Campaign | Twelve levels, level select, next-level unlock persisted in `localStorage` |
 | Corridor | Lane shape over `worldY`: narrowing, pinches and bends; the crowd compresses to fit |
 | Hazards | Pits that split the lane into two spans; the crowd funnels down to thread one |
-| Balance harness | Headless seeded probe: strategy survival, per-type attribution, and per-level win rate against a target ramp; 48 tests |
+| Structures | Barricades: a hazard with hit points, broken by fire or dodged. Turrets: flipped by fire, then tracking the nearest red at 30 rounds a second |
+| Balance harness | Headless seeded probe: strategy survival, per-type attribution, and per-level win rate against a target ramp; 80 tests |
 
-**Not built:** new structure kinds, bosses, audio, juice.
+**Not built:** bosses, audio, juice.
 
 ## 2. Confirmed design criteria
 
@@ -263,9 +264,27 @@ Three constraints the build has to respect:
 
 #### A turret is a second firing line you have to stand near
 
-Shoot a turret to flip it friendly. It then fires forward from its own `x` for as long as
-the squad is in range, and is left behind when you pass it. No steering state, no formation
-attachment, no new bullet machinery.
+Shoot a turret to flip it friendly. It then **tracks the nearest red and shoots at it**, at
+30 rounds a second, for as long as the squad is in range, and is left behind when you pass
+it. No steering state, no formation attachment, no new bullet machinery.
+
+**Aiming is what makes a turret a gun.** It shipped in phase 7 firing dead forward up its
+own column, on the reasoning that fixed-forward fire is the game's whole verb. That
+reasoning does not transfer: the squad fires forward because *position is targeting* and the
+player steers it, and a turret has no position to steer. A fixed emitter bolted to the lane
+edge hits whatever happens to wander into one column, which the probe priced at ten kills a
+run and zero win rate. Aiming also gives the range gate a meaning it lacked — a turret the
+squad has already passed now shoots the reds chasing it, instead of throwing bullets up an
+empty lane.
+
+A turret acquires once per frame rather than once per shot, by linear scan over the reds
+within `TURRET_TARGET_RANGE`. Not the spatial hash: turrets fire before the grid is rebuilt,
+so it holds last frame's positions, and its query caps its output — the wrong shape for a
+search that has to see every candidate. At most a couple of turrets are ever in range at
+once, so the scan is cheap and, unlike a capped query, exact.
+
+With no target it holds fire *and does not bank the interval*, or a turret that idles through
+a lull dumps the whole lull as one burst the instant a red appears.
 
 Two numbers decide whether it is worth having:
 
@@ -279,6 +298,11 @@ Two numbers decide whether it is worth having:
 
 `MAX_EMITTERS` is 26 and belongs to the squad's firing line. A turret's emitters come out of
 a separate budget or a turret quietly steals columns from the crowd it is supposed to help.
+
+**Rate of fire is a feel dial; damage per second is the balance dial.** Measured at a fixed
+810 damage a second, 20/s × 40 and 45/s × 18 produce the same win rates and the same kill
+counts to within noise. 30 × 30 is what ships: fast enough to read as a stream of tracers
+rather than a metronome, at a damage per second the probe sized rather than guessed.
 
 #### The data
 
@@ -334,7 +358,8 @@ barricade at t=0.85 is so close to the end of the level that it breaks naturally
 comparison that was meant to separate them does not. The barricade mechanic is functional
 and well-tested, but neither placed specimen creates a decision the probe can measure.
 
-**Turrets.** Three bugs were fixed before measuring:
+**Turrets.** These are the phase 7 measurements, kept because they are the case for the
+change that followed. Three bugs were fixed before measuring:
 
 1. `stepTurrets` had `|| o.resolved` in its guard — turrets stopped exactly when the squad
    drew level, cutting the trailing half of `TURRET_RANGE`. Removed.
@@ -375,6 +400,42 @@ position). Recommendation: **cut turrets from level 7**; keep level 9 where the 
 real. Phase 8 should evaluate whether a single turret level warrants the feature's ongoing
 complexity.
 
+#### What the probe measured (aimed turrets)
+
+The cut was not taken. A turret that tracks the nearest red at 30 rounds a second, at 30
+damage a round, was measured instead, and it is the better answer on both levels. Same 20
+seeds per level, same strategies:
+
+```
+lvl  measurement        strategy        turret kills   win%
+  7  a: with turrets    obj-light               37.0     65%
+  7  a: no turrets      obj-light                0.0     65%
+  7  b: decision        turret-seek             67.3     80%     (was 65%)
+  7  b: decision        turret-avoid            48.0     70%     (was 70%)
+
+  9  a: with turrets    obj-light                9.2     45%
+  9  a: no turrets      obj-light                0.0     45%
+  9  b: decision        turret-seek             21.6     50%     (was 45%)
+  9  b: decision        turret-avoid             3.1     25%     (was 25%)
+```
+
+**Level 7's reversal is gone.** Phase 7's damning result was that `turret-avoid` (70%) beat
+`turret-seek` (65%) — diverting fire onto a turret cost more than the turret returned. Aimed,
+seek beats avoid by ten points and the recommendation to cut turrets from level 7 is
+withdrawn. Level 9 already separated and separates wider now, 50% against 25%.
+
+**Damage per second is not the binding constraint; targets in range are.** Swept from 96 to
+6000 damage a second, level 7's turret kills under `obj-light` rise 19 → 49 and then stop,
+while `turret-seek` keeps climbing to 114. The ceiling is how many reds come within reach of a
+gun bolted to the lane edge, and the only way to raise it is to stand there — which is exactly
+the decision a turret is supposed to pose. Past ~800 damage a second, extra damage buys a
+turret-seeking player win rate and buys everyone else nothing, so the number was set where the
+decision is real rather than where the turret is strongest.
+
+**No difficulty was lifted.** Level 7 moved 70% → 73% against a 70% target, level 9 did not
+move at all, and both sit well inside the ±12 band. Three points on 40 seeds is noise, not a
+drift worth chasing with the difficulty dial.
+
 **Campaign win rates after phase 7** (obj-light, 40 seeds, target 95%→50% ±12):
 
 ```
@@ -384,15 +445,17 @@ complexity.
  4 THE PRESS         90%  (target  83%)
  5 HEAVY             75%  (target  79%)
  6 SHORT FUSE        78%  (target  75%)   ← barricade added
- 7 RED MILE          70%  (target  70%)
+ 7 RED MILE          73%  (target  70%)   ← aimed turrets (was 70%)
  8 STAMPEDE          68%  (target  66%)
- 9 THE WALL          53%  (target  62%)   ← turrets added (9 pts below target, within ±12)
+ 9 THE WALL          53%  (target  62%)   ← turrets added; unmoved by aiming them
 10 NARROWS           53%  (target  58%)   ← barricade moved to t=0.85
 11 GAUNTLET          48%  (target  54%)
 12 RED TIDE          50%  (target  50%)
 ```
 
-All twelve levels inside the ±12 point tolerance. The ten untouched levels are unchanged.
+All twelve levels inside the ±12 point tolerance. The ten levels with neither turrets nor
+barricades are unchanged to the digit, through phase 7 and through aiming the turrets after
+it.
 
 ## 4. Phases
 
@@ -402,17 +465,23 @@ All twelve levels inside the ±12 point tolerance. The ten untouched levels are 
 | 5 | ~~Level system~~ | **Done.** `LevelDef`, template generators, finish line, win/lose, level select, campaign flow | Split |
 | 6a | ~~Corridor~~ | **Done.** Corridor over worldY, narrowing, pinches and bends; crowd compression | Me |
 | 6b | ~~Hazards~~ | **Done.** Pits that split the corridor into two spans; proportional toll for standing in one | Me |
-| 7 | Structures | New objective kinds: turrets to free, barricades that must be broken to pass | Sonnet |
+| 7 | ~~Structures~~ | **Done.** Barricades that must be broken or dodged; turrets to free, since retargeted onto the nearest red | Sonnet |
 | 8 | Juice + audio | Screen shake, hit flash, damage popups, synthesized SFX, no audio files | Sonnet |
 | 9 | Content pass | 20 levels generated, measured and tuned against the probe | Me |
 | 10 | Forks | Corridor returning multiple spans; only if levels feel same-y without it | Me |
 
-**Phase 7 is next**, and is specified above rather than left to the implementer: a
-barricade is a hazard with hit points, a turret is a static friendly emitter, and a level
-that names neither is unchanged to the digit. It is the last content system before the
-campaign is extended.
+**Phase 8 is next.** Phase 7 shipped as specified — a barricade is a hazard with hit points,
+a turret is a friendly emitter, and a level that names neither is unchanged to the digit —
+except that the turret stopped being *static*: it now tracks the nearest red, which is what
+turned it from a measured non-decision into the best decision on level 7.
 
-Phase 9 now inherits a working per-level harness rather than building one, and extends the
+Before phase 8, `docs/CODE_REVIEW.md` is an unexecuted backlog with six P0 correctness bugs
+in it, three of which (§1 viewport-coupled balance, §4 turret bullets damaging objectives,
+§5 objectives unhittable past 1400) put wrong numbers into the probe everything else is tuned
+against. Phase 9 is blocked on it: retuning twelve levels against a probe with those bugs in
+it bakes them into the campaign.
+
+Phase 9 inherits a working per-level harness rather than building one, and extends the
 campaign from twelve levels to twenty.
 
 ## 5. The probe grew up
@@ -493,9 +562,12 @@ about skill counts until it has survived the same treatment.
 - **A breakable corridor is a mutable corridor.** Every line phase 6 wrote assumes the
   samples are baked at generation. Barricades are the one place phase 7 can break a system
   that currently works.
-- **A turret may simply be a weapon crate.** Both are shot, both sit off-centre, both reward
-  standing somewhere awkward. If the probe cannot separate a turret level from a crate
-  level, the answer is to cut turrets, not to buff them.
+- ~~**A turret may simply be a weapon crate.**~~ It was, while it fired dead forward: the
+  probe could not separate a turret level from a crate level and the answer was going to be
+  to cut it. Aiming separated them. The risk it leaves behind is the opposite one — **a
+  turret is only ever worth what standing next to it is worth.** Damage per second stops
+  buying anything above ~800 for a player who does not detour, so any future attempt to make
+  turrets matter more by raising their damage will measure as nothing.
 - **Barricade hp is the dangerous number**, the way exploder weight is dangerous in a mix.
   Too low and the wall is scenery; too high and dodging is always correct and the wall is a
   pit with extra steps.
@@ -517,7 +589,8 @@ same level at different densities?** `runner-rush` and `brute-wall` diverge on t
 leak column — 1.8% against 4.7% — but that is a measurement, not a feeling. If they play the
 same, the fix is more templates, not more seeds.
 
-A third, for when phase 7 lands: **does a turret read as a different reward from a crate?**
-The probe can say whether it changes the win rate. It cannot say whether flipping a gun to
-your side feels like anything other than opening a box, and that is the whole case for
-building it.
+A third, now that phase 7 has landed: **does a turret read as a different reward from a
+crate?** The probe now says it changes the win rate — ten points on level 7, twenty-five on
+level 9, between seeking one and avoiding it. It still cannot say whether a gun swinging onto
+a red and stitching it down the lane *feels* like anything other than opening a box, and that
+is the whole case for building it.
