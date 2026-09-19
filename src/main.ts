@@ -30,6 +30,8 @@ let progress: Progress = loadProgress();
 let level: LevelDef = FIRST_LEVEL;
 let world = new World(level, viewH);
 let menu: MenuLayout = buildMenu();
+/** Set when a level fails to build, so the menu can say so instead of the screen just going blank. */
+let buildError: string | null = null;
 
 function buildMenu(): MenuLayout {
   return renderer.menuLayout(
@@ -39,9 +41,26 @@ function buildMenu(): MenuLayout {
   );
 }
 
+/**
+ * A malformed level definition (a barricade whose hole the corridor refused
+ * to write, say) throws at construction. That is the right call for a data
+ * bug, but the whole app running from this one module-level `new World` call
+ * means an uncaught throw here would otherwise take the game down to a blank
+ * canvas with nothing but a console error to explain it.
+ */
 function play(next: LevelDef): void {
+  let w: World;
+  try {
+    w = new World(next, viewH);
+  } catch (err) {
+    console.error(`Failed to build level ${next.id} (${next.name})`, err);
+    buildError = `Couldn't load ${next.name} — pick another level.`;
+    toMenu();
+    return;
+  }
+  buildError = null;
   level = next;
-  world = new World(level, viewH);
+  world = w;
   screen = 'playing';
 }
 
@@ -166,7 +185,7 @@ createLoop(
     const delta = now - lastFrame;
     lastFrame = now;
     if (delta > 0) fps += (1000 / delta - fps) * 0.08;
-    if (screen === 'menu') renderer.drawMenu(menu);
+    if (screen === 'menu') renderer.drawMenu(menu, buildError);
     else renderer.draw(world, fps);
   },
 );

@@ -52,9 +52,9 @@ const GATE_HEIGHT = 130;
  * about to pass through otherwise balloons across the whole screen — and by
  * then the choice is already made, so there is nothing left to read.
  */
-// The squad plane sits at dz ~603 (CAM_BACK + viewH*SQUAD_SCREEN_FRAC), so a
-// gate is fully readable right up to the moment the crowd reaches it and only
-// then fades, rather than sailing on toward the lens at screen-filling size.
+// The squad plane sits at dz ~603 (CAM_BACK + SQUAD_AHEAD), so a gate is
+// fully readable right up to the moment the crowd reaches it and only then
+// fades, rather than sailing on toward the lens at screen-filling size.
 const FADE_NEAR = 400;
 const FADE_FULL = 620;
 
@@ -915,8 +915,11 @@ export class Renderer {
   /**
    * The level select. Drawn in flat screen space with no world behind it, so it
    * shares nothing with `draw` beyond the canvas itself.
+   *
+   * `error`, when set, is a level that failed to build — surfaced here rather
+   * than left to a console message nobody but a developer will ever see.
    */
-  drawMenu(layout: MenuLayout): void {
+  drawMenu(layout: MenuLayout, error?: string | null): void {
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const s = this.canvas.width / LANE_W;
@@ -934,6 +937,16 @@ export class Renderer {
     ctx.fillStyle = '#7c8394';
     ctx.font = `600 ${Math.round(24 * s)}px system-ui, -apple-system, sans-serif`;
     ctx.fillText('SELECT A LEVEL', this.canvas.width / 2, layout.titleY + 52 * s);
+
+    if (error) {
+      ctx.fillStyle = 'rgba(226,83,95,0.16)';
+      const bannerH = 46 * s;
+      const bannerY = layout.titleY + 90 * s;
+      ctx.fillRect(0, bannerY, this.canvas.width, bannerH);
+      ctx.fillStyle = COL_RED;
+      ctx.font = `600 ${Math.round(19 * s)}px system-ui, -apple-system, sans-serif`;
+      fitText(ctx, error, this.canvas.width / 2, bannerY + bannerH / 2, this.canvas.width * 0.9, bannerH * 0.7, 19 * s);
+    }
 
     for (const tile of layout.tiles) {
       const cx = tile.x + tile.w / 2;

@@ -7,8 +7,19 @@
 export const LANE_W = 720;
 
 export const SCROLL_SPEED = 240;
-/** Squad sits this fraction of the view height up from the bottom. */
-export const SQUAD_SCREEN_FRAC = 0.22;
+/**
+ * World-unit constants, not derived from the viewport. `viewH` is the
+ * viewport's own aspect ratio in disguise (`LANE_W * cssH / cssW`), so basing
+ * balance on it made a run on a tablet or in landscape a materially different
+ * (and, in landscape, unplayably short) game from the one every test and
+ * probe run measures at the reference `viewH` of 1560. Both are seeded to
+ * reproduce that reference exactly: `1560 * 0.22 ≈ 343` for the squad's
+ * distance ahead of the camera, and `1560 * 0.78 + 60 ≈ 1275` — the gap that
+ * comment above `BULLET_RANGE` already measured — for the reds' spawn
+ * distance ahead of the squad.
+ */
+export const SQUAD_AHEAD = 343;
+export const SPAWN_AHEAD = 1275;
 
 export const START_BLUE = 16;
 export const MAX_BLUE = 4000;

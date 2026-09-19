@@ -201,7 +201,11 @@ export function buildCorridor(
       const roomLeft = (hc - (c - hw)) - MIN_SPAN_HALF * 2;
       const roomRight = ((c + hw) - hc) - MIN_SPAN_HALF * 2;
       const allowed = Math.max(0, Math.min(grown, roomLeft, roomRight));
-      if (allowed <= 0) continue;
+      // Two hazards overlapping the same sample otherwise let the later one
+      // in `hazards` silently erase the earlier one's hole — the first
+      // hazard's `Barricade`/hazard record would then point at ground that
+      // belongs to something else. Widest hole wins instead.
+      if (allowed <= 0 || allowed <= holeHalfWidth[i]) continue;
       holeCentre[i] = hc;
       holeHalfWidth[i] = allowed;
     }

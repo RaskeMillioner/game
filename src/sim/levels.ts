@@ -122,8 +122,15 @@ export function baseRate(y: number): number {
  */
 const WAVE_TICK = 0.12;
 
-/** Safety valve: a pathological rate must not generate an unbounded list. */
-const MAX_WAVES = 8000;
+/**
+ * Safety valves: a pathological rate must not generate an unbounded list.
+ * Separate budgets per emitter, rather than one shared cap on `out.length` —
+ * `emitTide` runs first and filled a shared cap on its own, which on any
+ * level dense enough to reach it silently dropped every scripted burst: the
+ * thing that makes runner-rush, brute-wall and gauntlet distinct templates.
+ */
+const MAX_TIDE_WAVES = 8000;
+const MAX_BURST_WAVES = 8000;
 
 interface Burst {
   /** Cycled, so a gauntlet can alternate archetypes between bursts. */
@@ -273,7 +280,7 @@ function emitTide(def: LevelDef, tpl: Template, rng: Rng, out: SpawnWave[]): voi
   const horizon = horizonOf(def);
   const weights = new Float32Array(ENEMY_KINDS);
   let y = 0;
-  while (y < horizon && out.length < MAX_WAVES) {
+  for (let emitted = 0; y < horizon && emitted < MAX_TIDE_WAVES; emitted++) {
     const t = y / horizon;
     const u = y / 1000;
     const rate = Math.max(0.2, baseRate(y) * tpl.tide * tpl.shape(t) * def.difficulty);
@@ -300,7 +307,7 @@ function emitBursts(def: LevelDef, tpl: Template, rng: Rng, out: SpawnWave[]): v
   const horizon = horizonOf(def);
   const step = burst.every * horizon;
   let i = 0;
-  for (let y = step; y < horizon && out.length < MAX_WAVES; y += step, i++) {
+  for (let y = step; y < horizon && i < MAX_BURST_WAVES; y += step, i++) {
     const t = y / horizon;
     const type = burst.types[i % burst.types.length] as EnemyType;
     // Deliberately not scaled by difficulty: the level's scalar already lifts
