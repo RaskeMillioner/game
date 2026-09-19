@@ -75,6 +75,13 @@ const OBJ_COLOR: Record<ObjectiveKind, string> = {
   recruit: '#43d9a3',
   turret: '#7ec8e3',
 };
+/**
+ * How far a turret's barrel may swing off centre. Short of a half-turn so a
+ * turret shooting behind itself leans back rather than rotating into its own
+ * platform, where the barrel would be invisible.
+ */
+const BARREL_SWING = Math.PI * 0.72;
+
 const COL_BARRICADE = '#6b1c2c';
 const COL_BARRICADE_EDGE = '#c23850';
 const BARRICADE_HEIGHT = 280;
@@ -523,7 +530,10 @@ export class Renderer {
       // there is still something there to run over.
       // Active turrets stay upright — they are not rubble, they are firing.
       const brokenFlat = o.broken && o.kind !== 'turret';
-      const taken = o.collected;
+      // `collected` flips the moment the squad draws level with a structure,
+      // but a turret keeps firing for TURRET_RANGE behind the squad. Greying it
+      // out there would hide the one thing worth watching: the barrel tracking.
+      const taken = o.collected && !(o.kind === 'turret' && o.broken);
       const height = (brokenFlat ? OBJECTIVE_H * 0.22 : OBJECTIVE_H) * scale * (1 + flash * 0.12);
       const baseX = base.x;
       const baseY = base.y;
@@ -533,7 +543,7 @@ export class Renderer {
 
       const activeColor = (o.kind === 'turret' && o.broken) ? '#43d9a3' : OBJ_COLOR[o.kind as ObjectiveKind];
       ctx.fillStyle = taken ? OBJ_BROKEN_COLOR : activeColor;
-      this.drawObjectiveSilhouette(o.kind, leftX, rightX, baseY, topY, scale, brokenFlat);
+      this.drawObjectiveSilhouette(o.kind, leftX, rightX, baseY, topY, scale, brokenFlat, o.aimAngle);
 
       if (flash > 0.01) {
         ctx.fillStyle = `rgba(255,255,255,${Math.min(0.85, flash * 0.85)})`;
@@ -638,6 +648,7 @@ export class Renderer {
     topY: number,
     scale: number,
     broken: boolean,
+    aim: number,
   ): void {
     const ctx = this.ctx;
     const w = rightX - leftX;
@@ -669,12 +680,22 @@ export class Renderer {
       return;
     }
     if (kind === 'turret') {
-      // Platform base + vertical barrel.
+      // Platform base + a barrel that swings to wherever the sim is aiming.
+      // The billboard faces the camera, so the world angle is used directly and
+      // only clamped short of straight down: a turret shooting at something
+      // behind it should lean back, not bury the barrel in its own platform.
       const platformH = h * 0.28;
       const barrelW = Math.max(1, w * 0.18);
       const barrelH = h * 0.72;
       ctx.fillRect(leftX, baseY - platformH, w, platformH);
-      ctx.fillRect((leftX + rightX) / 2 - barrelW / 2, topY, barrelW, barrelH);
+      const pivotX = (leftX + rightX) / 2;
+      const pivotY = baseY - platformH;
+      const swing = Math.max(-BARREL_SWING, Math.min(BARREL_SWING, aim));
+      ctx.save();
+      ctx.translate(pivotX, pivotY);
+      ctx.rotate(swing);
+      ctx.fillRect(-barrelW / 2, -barrelH, barrelW, barrelH);
+      ctx.restore();
       return;
     }
     // Multiplier: a flat sign board on a thin post.

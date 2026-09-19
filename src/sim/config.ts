@@ -148,8 +148,18 @@ export const SQUEEZE_LOOKAHEAD = 600;
 export const MAX_CORPSE = 400;
 export const CORPSE_LIFE = 4.0;
 
-export const TURRET_FIRE_RATE = 4;
-export const TURRET_BULLET_DAMAGE = 8;
+/*
+ * A turret tracks the nearest red rather than firing up its own column, so its
+ * rate of fire is what makes it worth flipping: a fixed forward emitter could
+ * be slow because most of its shots missed anyway, an aimed one cannot.
+ */
+export const TURRET_FIRE_RATE = 30;
+export const TURRET_BULLET_DAMAGE = 30;
 export const TURRET_BULLET_SPEED = 1000;
 /** How far from the squad's anchor a turret is still considered in range. */
 export const TURRET_RANGE = 800;
+/**
+ * How far a turret will look for a target. Capped at BULLET_RANGE so it never
+ * aims at something its own bullet expires before reaching.
+ */
+export const TURRET_TARGET_RANGE = BULLET_RANGE;

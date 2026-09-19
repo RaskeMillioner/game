@@ -4,7 +4,7 @@ import {
   ANCHOR_FOLLOW, BLUE_FOLLOW, BREAKTHROUGH_PAD, BULLET_RADIUS, BULLET_RANGE, CONTACT_PAD, CORPSE_LIFE,
   FIRE_COLUMN_FILL, FIRE_FAN_REF, LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
   RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_EDGE_PAD, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
-  HAZARD_RATE, SQUEEZE_LOOKAHEAD, START_BLUE, TURRET_BULLET_DAMAGE, TURRET_BULLET_SPEED, TURRET_FIRE_RATE, TURRET_RANGE, WEAPONS,
+  HAZARD_RATE, SQUEEZE_LOOKAHEAD, START_BLUE, TURRET_BULLET_DAMAGE, TURRET_BULLET_SPEED, TURRET_FIRE_RATE, TURRET_RANGE, TURRET_TARGET_RANGE, WEAPONS,
 } from './config.js';
 import { ENEMIES, ENEMY_KINDS } from './enemies.js';
 import {
@@ -644,28 +644,82 @@ export class World {
   }
 
   /**
-   * Fires turrets that are active (broken, in range, not yet resolved). Turret
-   * bullets are flat-damage and do not spend from the squad's emitter budget.
+   * Fires turrets that are active (broken, in range, not yet resolved). A
+   * turret tracks the nearest red and shoots at it: unlike the squad, which
+   * fires dead forward because position *is* targeting, a turret has no
+   * position to steer, so aiming is the only thing that makes it a gun rather
+   * than a column of fire. Turret bullets are flat-damage and do not spend
+   * from the squad's emitter budget.
+   *
+   * Aiming also gives the range gate a meaning it lacked: a turret the squad
+   * has already passed now shoots the reds chasing it, rather than throwing
+   * bullets up an empty lane.
    */
   private stepTurrets(dt: number): void {
+    const interval = 1 / TURRET_FIRE_RATE;
     for (const o of this.objectives) {
       if (o.kind !== 'turret' || !o.broken) continue;
       if (Math.abs(this.anchorY - o.y) > TURRET_RANGE) continue;
+
+      // Acquired once per frame, not once per shot: at this rate of fire the
+      // scan would otherwise run a dozen times a frame for a target that has
+      // moved a few units between them.
+      const target = this.nearestRed(o.x, o.y);
       o.fireTimer += dt;
-      const interval = 1 / TURRET_FIRE_RATE;
+      if (target < 0) {
+        // Nothing to shoot at. Hold the accumulator just below one interval so
+        // the turret fires promptly when a red arrives without dumping a whole
+        // lull's worth of banked shots in a single frame.
+        if (o.fireTimer > interval) o.fireTimer = interval;
+        continue;
+      }
+
+      const dx = this.redX[target] - o.x;
+      const dy = this.redY[target] - o.y;
+      const dist = Math.hypot(dx, dy);
+      // A red standing exactly on the turret has no direction; keep the last
+      // one rather than dividing by zero.
+      if (dist > 1e-3) o.aimAngle = Math.atan2(dx, dy);
+      const vx = Math.sin(o.aimAngle) * TURRET_BULLET_SPEED;
+      const vy = Math.cos(o.aimAngle) * TURRET_BULLET_SPEED;
+
       while (o.fireTimer >= interval) {
         o.fireTimer -= interval;
         if (this.bulletCount >= MAX_BULLET) break;
         const j = this.bulletCount++;
         this.bulX[j] = o.x;
         this.bulY[j] = o.y;
-        this.bulVX[j] = 0;
-        this.bulVY[j] = TURRET_BULLET_SPEED;
+        this.bulVX[j] = vx;
+        this.bulVY[j] = vy;
         this.bulLife[j] = BULLET_RANGE / TURRET_BULLET_SPEED;
         this.bulDmg[j] = TURRET_BULLET_DAMAGE;
         this.bulFromTurret[j] = 1;
       }
     }
+  }
+
+  /**
+   * Index of the live red nearest (x, y) within TURRET_TARGET_RANGE, or -1.
+   *
+   * A linear scan rather than a grid query: `stepTurrets` runs before the grid
+   * is rebuilt, so the grid holds last frame's positions, and `query` caps its
+   * output at the size of `hits`, which is the wrong shape for a search that
+   * has to see every candidate. At most a couple of turrets are ever in range
+   * at once, so the scan is cheap and, unlike a capped query, exact.
+   */
+  private nearestRed(x: number, y: number): number {
+    let best = -1;
+    let bestD2 = TURRET_TARGET_RANGE * TURRET_TARGET_RANGE;
+    for (let i = 0; i < this.redCount; i++) {
+      const dx = this.redX[i] - x;
+      const dy = this.redY[i] - y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = i;
+      }
+    }
+    return best;
   }
 
   /** Bullets (non-turret) that enter a live barricade's span damage it. */

@@ -250,8 +250,12 @@ stated reason.
 
 **Fix.** Use `dt / FLASH_DECAY` for both, with `FLASH_DECAY` in `config.ts`.
 
-### 12. An active turret renders as grey "TAKEN"
+### 12. An active turret renders as grey "TAKEN" — FIXED
 `src/sim/objectives.ts:100-102`, `src/render/renderer.ts:534-535`, `:558`
+
+**Fixed** alongside retargeting turrets: `taken` now excludes a broken turret, so one that is
+still firing keeps its colour and its label. It had to be — with the barrel tracking a target,
+greying the turret out hides the only thing worth watching.
 
 `collectObjective` sets `collected = true` for a turret once the squad draws level with it.
 The renderer then takes the `taken` branch: grey fill (`OBJ_BROKEN_COLOR`) and the label
@@ -263,8 +267,13 @@ spent.
 and let the existing `o.kind === 'turret' && o.broken` branches supply the active colour and
 label.
 
-### 13. Turrets fire in both directions and waste bullets behind the squad
+### 13. Turrets fire in both directions and waste bullets behind the squad — RESOLVED
 `src/sim/world.ts:651-653`
+
+**No longer a defect.** Turrets now track the nearest red instead of firing up their own
+column, so a turret the squad has passed shoots the reds chasing it rather than throwing
+bullets up an empty lane. The `Math.abs` range gate is deliberate and stays. The original
+finding is kept below for the record.
 
 ```ts
 if (Math.abs(this.anchorY - o.y) > TURRET_RANGE) continue;
@@ -392,8 +401,8 @@ game is, the live URL, `npm run dev` / `test` / `build`, how to run the probe an
 tool, and a pointer to `docs/PLAN.md`.
 
 ### 24. `docs/PLAN.md` has drifted
-- Line 20 (§1 table): *"48 tests"* — there are **75**.
-- Line 14: *"34 kB, 12 kB gzipped"* — the build is now **43.94 kB / 15.46 kB**.
+- ~~Line 20 (§1 table): *"48 tests"*~~ — refreshed to 80.
+- ~~Line 14: *"34 kB, 12 kB gzipped"*~~ — refreshed to 44 kB / 16 kB.
 - `src/sim/campaign.ts:15` says *"Phase 9 extends this to twenty levels"* — the campaign has
   twelve and Phase 7 has shipped.
 - The enemy table (PLAN lines 84-88) lists Brute cost 6 / Exploder cost 8 against shipped
@@ -456,8 +465,10 @@ after each.
    world y 14000–17000; a Playwright screenshot via the dev `__world()` hook is the cheapest
    check.
 4. **Sim behaviour, needs a probe re-run** — §4 (turret bullets vs objectives), §5 (objective
-   hit range), §13 (turret firing arc). Run `probe.ts` before and after and record the
-   before/after tables in the commit message; expect small win-rate shifts.
+   hit range). Run `probe.ts` before and after and record the before/after tables in the
+   commit message; expect small win-rate shifts. §13 is resolved and §12 is fixed; note that
+   §4 matters more now than when it was written, because an aimed turret fires 30 rounds a
+   second rather than 4 and so breaks open far more objectives it was never meant to touch.
 5. **Performance** — §7 (`sample()` allocation), §8 (squeeze caching). Behaviour must be
    bit-identical: the determinism tests (`world.test.ts:57`) and
    `levels.test.ts:55` are the guard.
