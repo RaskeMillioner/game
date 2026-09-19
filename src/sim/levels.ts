@@ -1,14 +1,15 @@
 import { Rng } from '../core/rng.js';
 import { GATE_FIRST, GATE_SPACING, SCROLL_SPEED } from './config.js';
 import {
-  buildCorridor, Corridor, CorridorSpec, HazardSpec, STRAIGHT,
+  buildCorridor, BarricadeSpec, Corridor, CorridorSpec, HazardSpec, STRAIGHT,
 } from './corridor.js';
+import { buildBarricades, Barricade } from './barricades.js';
 import {
   BRUTE, ENEMY_KINDS, EnemyType, EXPLODER, enemyHp, GRUNT, mixAt, pickType, RUNNER,
 } from './enemies.js';
 import { buildGates, Gate } from './gates.js';
 import {
-  buildObjectives, Objective, OBJECTIVE_FIRST, OBJECTIVE_SPACING,
+  buildObjectives, buildTurrets, Objective, OBJECTIVE_FIRST, OBJECTIVE_SPACING,
 } from './objectives.js';
 
 /**
@@ -50,6 +51,10 @@ export interface StructureSpec {
   readonly gateSpacing: number;
   readonly objectiveFirst: number;
   readonly objectiveSpacing: number;
+  /** Where the first turret sits, if this level has any. */
+  readonly turretFirst?: number;
+  /** Spacing between turrets. Required if turretFirst is set. */
+  readonly turretSpacing?: number;
 }
 
 export const DEFAULT_STRUCTURES: StructureSpec = {
@@ -75,6 +80,8 @@ export interface LevelDef {
   readonly corridor?: CorridorSpec;
   /** Static obstructions splitting the lane. Omitted means an unbroken one. */
   readonly hazards?: readonly HazardSpec[];
+  /** Shootable walls with hit points. Omitted means no barricades. */
+  readonly barricades?: readonly BarricadeSpec[];
 }
 
 /** Everything a `World` needs to run a level, generated once at construction. */
@@ -82,6 +89,7 @@ export interface LevelPlan {
   readonly waves: readonly SpawnWave[];
   readonly gates: Gate[];
   readonly objectives: Objective[];
+  readonly barricades: Barricade[];
   readonly finishY: number;
   readonly corridor: Corridor;
 }
@@ -342,20 +350,36 @@ export function buildLevel(def: LevelDef): LevelPlan {
 
   // Built before the structures, because where a gate or a crate can sit is a
   // question about the lane at that point rather than about the lane's width.
-  const corridor = buildCorridor(def.corridor ?? STRAIGHT, horizon, def.hazards ?? []);
+  // Barricades are baked as hazards so the corridor's hole arrays cover them.
+  const allHazards = [...(def.hazards ?? []), ...(def.barricades ?? [])];
+  const corridor = buildCorridor(def.corridor ?? STRAIGHT, horizon, allHazards);
+  const barricades = buildBarricades(def.barricades ?? [], corridor, horizon);
 
   const gates = buildGates(rng, gateCount, s.gateFirst, s.gateSpacing, corridor);
-  // Nudging an objective clear of a gate can push it past where it was meant to
-  // sit, and anything past the line is content the player can never reach — or,
-  // worse, a crate drawn on the far side of a finished level.
+  const gateYs = gates.map((g) => g.y);
+
   const objectives = buildObjectives(
     rng,
     objectiveCount,
-    gates.map((g) => g.y),
+    gateYs,
     s.objectiveFirst,
     s.objectiveSpacing,
     corridor,
   ).filter((o) => o.y < usable);
 
-  return { waves, gates, objectives, finishY: def.length, corridor };
+  const turretCount = s.turretFirst != null && s.turretSpacing != null && usable > s.turretFirst
+    ? Math.floor((usable - s.turretFirst) / s.turretSpacing) + 1
+    : 0;
+  const turrets = turretCount > 0
+    ? buildTurrets(rng, turretCount, s.turretFirst!, s.turretSpacing!, gateYs, corridor)
+        .filter((t) => t.y < usable)
+    : [];
+
+  return {
+    waves, gates,
+    objectives: [...objectives, ...turrets],
+    barricades,
+    finishY: def.length,
+    corridor,
+  };
 }

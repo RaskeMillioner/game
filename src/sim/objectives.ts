@@ -3,7 +3,7 @@ import { LANE_W, MAX_BLUE, WEAPONS } from './config.js';
 import { centreAt, Corridor, halfWidthAt } from './corridor.js';
 import { clearOfHole } from './gates.js';
 
-export type ObjectiveKind = 'weapon' | 'recruit';
+export type ObjectiveKind = 'weapon' | 'recruit' | 'turret';
 
 /**
  * A shootable structure in the lane. Objectives compete with the swarm for the
@@ -25,6 +25,8 @@ export interface Objective {
   resolved: boolean;
   /** True only if the reward was actually taken, as opposed to left behind. */
   collected: boolean;
+  /** Firing accumulator for turrets; unused on other kinds. */
+  fireTimer: number;
 }
 
 export const OBJECTIVE_W = 132;
@@ -49,6 +51,8 @@ export function objectiveLabel(o: Objective, weaponTier: number): string {
       return WEAPONS[Math.min(WEAPONS.length - 1, weaponTier + o.value)].name;
     case 'recruit':
       return `+${o.value}`;
+    case 'turret':
+      return o.broken ? 'ACTIVE' : 'FLIP IT';
   }
 }
 
@@ -57,6 +61,7 @@ export function objectiveCaption(o: Objective): string {
   switch (o.kind) {
     case 'weapon': return 'WEAPON';
     case 'recruit': return 'RECRUITS';
+    case 'turret': return 'TURRET';
   }
 }
 
@@ -92,6 +97,9 @@ export function collectObjective(
     case 'recruit':
       o.collected = true;
       return { count: Math.min(MAX_BLUE, count + o.value), weaponTier };
+    case 'turret':
+      o.collected = true;
+      return { count, weaponTier };
   }
 }
 
@@ -149,6 +157,62 @@ export function buildObjectives(
       flash: 0,
       resolved: false,
       collected: false,
+      fireTimer: 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * Builds turret objectives: shootable structures that fire for the squad once
+ * flipped. Same placement logic as `buildObjectives`, but a different kind and
+ * a fixed HP budget that does not scale with level count.
+ */
+export function buildTurrets(
+  _rng: Rng,
+  count: number,
+  first: number,
+  spacing: number,
+  gateYs: readonly number[] = [],
+  corridor?: Corridor,
+): Objective[] {
+  const out: Objective[] = [];
+  const clearOfGates = (y: number): number => {
+    for (const gy of gateYs) {
+      const gap = y - gy;
+      if (gap > -MIN_GATE_GAP && gap < MIN_GATE_GAP) {
+        return gap < 0 ? gy - MIN_GATE_GAP : gy + MIN_GATE_GAP;
+      }
+    }
+    return y;
+  };
+  for (let i = 0; i < count; i++) {
+    // Alternating sides so multiple turrets on a level land on opposite sides.
+    // Using rng only for variety within the alternating pattern avoids all three
+    // turrets drawing the same side (as happened with purely random placement).
+    const side = i % 2 === 0 ? -1 : 1;
+    const y = clearOfGates(first + i * spacing);
+    const centre = corridor ? centreAt(corridor, y) : LANE_W / 2;
+    const half = corridor ? halfWidthAt(corridor, y) : LANE_W / 2;
+    const x = corridor
+      ? clearOfHole(corridor, y, centre + side * half * 0.56, OBJECTIVE_W / 2, centre, half)
+      : centre + side * half * 0.56;
+    // HP ramps with index: turrets get cheaper in relative fire-cost terms as the
+    // level progresses, but absolute HP rises so a late-level squad still has to
+    // commit. Same intent as crate HP ramping.
+    const hp = 280 + i * 200;
+    out.push({
+      kind: 'turret',
+      x,
+      y,
+      maxHp: hp,
+      hp,
+      value: 0,
+      broken: false,
+      flash: 0,
+      resolved: false,
+      collected: false,
+      fireTimer: 0,
     });
   }
   return out;

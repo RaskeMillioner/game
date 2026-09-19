@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_RED, START_BLUE, WEAPONS } from './config.js';
+import { LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_RED, SCROLL_SPEED, START_BLUE, TURRET_RANGE, WEAPONS } from './config.js';
 import {
   BRUTE, ENEMIES, ENEMY_KINDS, enemyHp, GRUNT, pickType, RUNNER,
 } from './enemies.js';
 import { gateIsGood, GATE_PANEL_W } from './gates.js';
+import { CAMPAIGN } from './campaign.js';
 import { endlessLevel } from './levels.js';
 import { World } from './world.js';
 
@@ -338,6 +339,66 @@ describe('enemy types', () => {
     // single bullet would have deleted it regardless of hp.
     expect(w.redHp[brute]).toBeLessThan(1e6);
   });
+});
+
+describe('turrets', () => {
+  it('can be broken by squad fire from a plausible playing position', () => {
+    const level = CAMPAIGN.find((l) => (l.structures.turretFirst ?? 0) > 0)!;
+    expect(level).toBeDefined();
+    const w = new World(level, VIEW_H);
+    const turret = w.objectives.find((o) => o.kind === 'turret');
+    expect(turret).toBeDefined();
+    if (!turret) return;
+    const budget = Math.ceil(((level.length / SCROLL_SPEED) * 1.35 + 10) * 60);
+    for (let i = 0; i < budget && !turret.broken; i++) {
+      w.count = Math.max(w.count, 200);  // keep enough squad to fire and stay alive
+      w.targetX = turret.x;
+      w.step(1 / 60);
+    }
+    expect(turret.broken).toBe(true);
+  }, 15_000);
+
+  it('fires while in TURRET_RANGE, registers kills, and stops beyond it', () => {
+    const level = CAMPAIGN.find((l) => (l.structures.turretFirst ?? 0) > 0)!;
+    const w = new World(level, VIEW_H);
+    const turret = w.objectives.find((o) => o.kind === 'turret');
+    if (!turret) return;
+
+    // Manually flip the turret and advance to just within range
+    turret.hp = 0;
+    turret.broken = true;
+    while (w.anchorY < turret.y - TURRET_RANGE + 50 && w.state === 'running') {
+      w.step(1 / 60);
+    }
+    w.count = 200;
+
+    // Should emit at least one turret bullet within the first 30 frames
+    let firedInRange = false;
+    for (let i = 0; i < 30 && w.state === 'running'; i++) {
+      w.step(1 / 60);
+      for (let j = 0; j < w.bulletCount; j++) {
+        if (w.bulFromTurret[j]) { firedInRange = true; break; }
+      }
+      if (firedInRange) break;
+    }
+    expect(firedInRange).toBe(true);
+
+    // Kills should accumulate while the squad and turret are in range
+    const killsBefore = w.turretKills;
+    for (let i = 0; i < 180 && w.state === 'running' && w.anchorY < turret.y + TURRET_RANGE; i++) {
+      w.step(1 / 60);
+    }
+    expect(w.turretKills).toBeGreaterThan(killsBefore);
+
+    // Past TURRET_RANGE the turret is silent; let in-flight bullets expire (2s)
+    while (w.anchorY < turret.y + TURRET_RANGE + 100 && w.state === 'running') {
+      w.step(1 / 60);
+    }
+    for (let i = 0; i < 120 && w.state === 'running'; i++) w.step(1 / 60);
+    const frozen = w.turretKills;
+    for (let i = 0; i < 60 && w.state === 'running'; i++) w.step(1 / 60);
+    expect(w.turretKills).toBe(frozen);
+  }, 20_000);
 });
 
 describe('weapon pickups', () => {

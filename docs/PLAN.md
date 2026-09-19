@@ -223,11 +223,11 @@ looser than a half-width of ~232 squeezes nothing at all. The first THE PRESS bo
 at 231 and was pure scenery. `SQUEEZE_THRESHOLD` and a test now hold every shaped level
 below it.
 
-### Structures — designed, not built
+### Structures
 
 Phase 7 adds two kinds of thing to the lane: a **barricade**, which is in your way, and a
-**turret**, which is on your side once you have paid for it. Neither is built. What follows
-is the spec the implementing session works from, and the alternatives it beat.
+**turret**, which is on your side once you have paid for it. Both are built. What follows
+is the spec they were built from, and what the probe actually measured after building.
 
 #### A barricade is a pit you are allowed to fill in
 
@@ -304,8 +304,95 @@ them under objectives would put two systems in charge of one hole.
 held by an explicit test rather than by assumption — the same discipline that let ten of
 twelve levels keep their measured win rates through phase 6.
 
-Three or four levels gain content, not twelve: a mid-campaign level gets a turret pair, a
-late one gets a barricade in a stretch the corridor already narrows. Only those are retuned.
+Four levels gained content: levels 6 and 10 have barricades; levels 7 and 9 have turrets.
+
+#### What the probe measured (phase 7)
+
+**Barricades.** Level 10's original placement at t=0.52 (the bend's tightest point,
+laneHalf≈155) could not fit a 160-wide hole — the lane leaves only 55 units each side, below
+MIN_SPAN_HALF=100. Moved to t=0.85 where the corridor opens to laneHalf≈360, giving
+a hole half-width of 159.6 with 200.4 each side.
+
+Probe (20 seeds per level):
+
+```
+lvl  strategy           win%   hazard losses
+  6  obj-light             80%              0
+  6  obj-pit               45%              0
+  6  barricade-shoot       75%              0
+
+ 10  obj-light             60%            382
+ 10  obj-pit               20%             15
+ 10  barricade-shoot       60%            382
+```
+
+Level 6: the barricade creates no hazard losses for any strategy — the wall is thin enough
+and the lane wide enough that fire breaks it before the squad arrives. barricade-shoot is
+slightly worse than obj-light because committing fire to the barricade hole costs crate and
+gate collection. Level 10: barricade-shoot equals obj-light (both 60%, 382 losses). The
+barricade at t=0.85 is so close to the end of the level that it breaks naturally; the
+comparison that was meant to separate them does not. The barricade mechanic is functional
+and well-tested, but neither placed specimen creates a decision the probe can measure.
+
+**Turrets.** Three bugs were fixed before measuring:
+
+1. `stepTurrets` had `|| o.resolved` in its guard — turrets stopped exactly when the squad
+   drew level, cutting the trailing half of `TURRET_RANGE`. Removed.
+2. All three level-7 turrets landed on x=158 (rng drew left three times). `buildTurrets`
+   now alternates sides by index.
+3. Turret HP was fixed at 320 while crates ramp 240→2400. HP now ramps: 280 + i×200.
+4. Squad bullets reused turret-bullet slots without zeroing `bulFromTurret`, causing false
+   kills after the turret was out of range. Fixed by zeroing `bulFromTurret[j]` when
+   emitting squad bullets.
+
+Probe (20 seeds per level):
+
+```
+lvl  measurement        strategy        turret kills   win%
+  7  a: with turrets    obj-light                9.8     65%
+  7  a: no turrets      obj-light                0.0     65%
+  7  b: decision        turret-seek             17.3     65%
+  7  b: decision        turret-avoid             2.9     70%
+
+  9  a: with turrets    obj-light                1.4     45%
+  9  a: no turrets      obj-light                0.0     45%
+  9  b: decision        turret-seek              3.5     45%
+  9  b: decision        turret-avoid             0.1     25%
+```
+
+Level 7: turrets add ~10 kills per run but move the win rate by 0 points (65% with or
+without). The decision test reverses: turret-avoid (70%) beats turret-seek (65%). Committing
+fire to the turret costs enemies killed, and the fire support it returns is not worth the
+trade at level 7's difficulty. Level 9: turrets also add ≤2 kills per run and do not move
+the "with vs without" win rate. The decision test separates sharply: turret-avoid (25%) is
+20 points worse than turret-seek (45%), because avoid steers away from turrets even after
+they are flipped, losing both the positional benefit and the fire support.
+
+**The plan pre-authorised this answer.** Turrets add kills but do not improve win rates on
+either level. On level 7 the feature is not a decision; on level 9 it is a decision but only
+because avoid is self-defeating (steering away from a broken turret means steering into worse
+position). Recommendation: **cut turrets from level 7**; keep level 9 where the decision is
+real. Phase 8 should evaluate whether a single turret level warrants the feature's ongoing
+complexity.
+
+**Campaign win rates after phase 7** (obj-light, 40 seeds, target 95%→50% ±12):
+
+```
+ 1 FIRST CONTACT    100%  (target  95%)
+ 2 OPEN GROUND       93%  (target  91%)
+ 3 SPRINTERS         95%  (target  87%)
+ 4 THE PRESS         90%  (target  83%)
+ 5 HEAVY             75%  (target  79%)
+ 6 SHORT FUSE        78%  (target  75%)   ← barricade added
+ 7 RED MILE          70%  (target  70%)
+ 8 STAMPEDE          68%  (target  66%)
+ 9 THE WALL          53%  (target  62%)   ← turrets added (9 pts below target, within ±12)
+10 NARROWS           53%  (target  58%)   ← barricade moved to t=0.85
+11 GAUNTLET          48%  (target  54%)
+12 RED TIDE          50%  (target  50%)
+```
+
+All twelve levels inside the ±12 point tolerance. The ten untouched levels are unchanged.
 
 ## 4. Phases
 

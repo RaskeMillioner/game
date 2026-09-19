@@ -10,6 +10,7 @@ import {
   objectiveCaption, objectiveLabel, type Objective, OBJECTIVE_H, OBJECTIVE_W,
   type ObjectiveKind,
 } from '../sim/objectives.js';
+import type { Barricade } from '../sim/barricades.js';
 import type { LevelDef } from '../sim/levels.js';
 import type { World } from '../sim/world.js';
 import { hitRect, layoutMenu, menuButton, type MenuLayout, type Rect } from './menu.js';
@@ -21,6 +22,7 @@ interface StructureItem {
   dz: number;
   gate: Gate | null;
   objective: Objective | null;
+  barricade: Barricade | null;
 }
 
 const COL_BG = '#0d0d12';
@@ -71,7 +73,11 @@ const HEAD_OFF = 14.6;
 const OBJ_COLOR: Record<ObjectiveKind, string> = {
   weapon: '#e0a83c',
   recruit: '#43d9a3',
+  turret: '#7ec8e3',
 };
+const COL_BARRICADE = '#6b1c2c';
+const COL_BARRICADE_EDGE = '#c23850';
+const BARRICADE_HEIGHT = 280;
 const OBJ_BROKEN_COLOR = '#3a3a44';
 const COL_FINISH = '#f2f4fa';
 /** Deep enough that the band still reads as a band from across the lane. */
@@ -410,17 +416,24 @@ export class Renderer {
     order.length = 0;
     for (const gate of w.gates) {
       if (gate.taken) continue;
-      order.push({ dz: proj.dz(gate.y), gate, objective: null });
+      order.push({ dz: proj.dz(gate.y), gate, objective: null, barricade: null });
     }
     for (const o of w.objectives) {
       const dz = proj.dz(o.y);
       if (o.resolved && dz < NEAR) continue;
-      order.push({ dz, gate: null, objective: o });
+      order.push({ dz, gate: null, objective: o, barricade: null });
+    }
+    for (const b of w.barricades) {
+      if (b.broken) continue;
+      const dz = proj.dz(b.y);
+      if (dz < NEAR || dz > FAR_DZ) continue;
+      order.push({ dz, gate: null, objective: null, barricade: b });
     }
     order.sort((a, b) => b.dz - a.dz);
     for (const item of order) {
       if (item.gate) this.drawGate(item.gate);
       else if (item.objective) this.drawObjective(item.objective, w.weaponTier);
+      else if (item.barricade) this.drawBarricade(item.barricade, w.corridor);
     }
   }
 
@@ -508,7 +521,8 @@ export class Renderer {
       // Cracked open but not yet taken is a live pickup lying in the lane, not
       // a spent husk: it keeps its colour and its label so the player can see
       // there is still something there to run over.
-      const brokenFlat = o.broken;
+      // Active turrets stay upright — they are not rubble, they are firing.
+      const brokenFlat = o.broken && o.kind !== 'turret';
       const taken = o.collected;
       const height = (brokenFlat ? OBJECTIVE_H * 0.22 : OBJECTIVE_H) * scale * (1 + flash * 0.12);
       const baseX = base.x;
@@ -517,7 +531,8 @@ export class Renderer {
       const leftX = baseX - halfW;
       const rightX = baseX + halfW;
 
-      ctx.fillStyle = taken ? OBJ_BROKEN_COLOR : OBJ_COLOR[o.kind as ObjectiveKind];
+      const activeColor = (o.kind === 'turret' && o.broken) ? '#43d9a3' : OBJ_COLOR[o.kind as ObjectiveKind];
+      ctx.fillStyle = taken ? OBJ_BROKEN_COLOR : activeColor;
       this.drawObjectiveSilhouette(o.kind, leftX, rightX, baseY, topY, scale, brokenFlat);
 
       if (flash > 0.01) {
@@ -549,10 +564,13 @@ export class Renderer {
       fitText(ctx, label, baseX, baseY - panelH * 0.55, panelW, panelH * 0.42, 34 * scale);
 
       if (!taken) {
+        const caption = brokenFlat ? 'RUN OVER IT'
+          : (o.kind === 'turret' && o.broken) ? 'FIRING'
+          : objectiveCaption(o);
         ctx.fillStyle = 'rgba(255,255,255,0.92)';
         fitText(
           ctx,
-          brokenFlat ? 'RUN OVER IT' : objectiveCaption(o),
+          caption,
           baseX,
           topY - Math.max(6, 20 * scale),
           panelW * 1.1,
@@ -562,6 +580,54 @@ export class Renderer {
       }
       ctx.restore();
     }
+  }
+
+  private drawBarricade(b: Barricade, corridor: Corridor): void {
+    const ctx = this.ctx;
+    const proj = this.projector;
+    const dz = proj.dz(b.y);
+    if (dz < -50 || dz > FAR_DZ) return;
+    const fade = nearFade(dz);
+    if (fade <= 0.01) return;
+
+    const hc = holeCentreAt(corridor, b.y);
+    const hw = holeHalfWidthAt(corridor, b.y);
+    if (hw <= 0) return;
+    const base = proj.project(hc, b.y);
+    const scale = base.scale;
+    const halfW = hw * scale;
+    if (base.x + halfW < 0 || base.x - halfW > LANE_W) return;
+
+    ctx.save();
+    ctx.globalAlpha = fade * (1 - b.flash * 0.5);
+
+    const height = BARRICADE_HEIGHT * scale;
+    const leftX = base.x - halfW;
+    const rightX = base.x + halfW;
+    const topY = base.y - height;
+
+    // HP bar
+    const frac = b.hp / b.maxHp;
+    const barH = Math.max(2, 5 * scale);
+    const barY = topY - barH - Math.max(1, 3 * scale);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(leftX, barY, rightX - leftX, barH);
+    ctx.fillStyle = COL_BARRICADE_EDGE;
+    ctx.fillRect(leftX, barY, (rightX - leftX) * Math.max(0, Math.min(1, frac)), barH);
+
+    ctx.fillStyle = COL_BARRICADE;
+    ctx.fillRect(leftX, topY, rightX - leftX, height);
+
+    ctx.strokeStyle = COL_BARRICADE_EDGE;
+    ctx.lineWidth = Math.max(1, 3 * scale);
+    ctx.strokeRect(leftX, topY, rightX - leftX, height);
+
+    if (b.flash > 0.01) {
+      ctx.fillStyle = `rgba(255,255,255,${Math.min(0.75, b.flash * 0.75)})`;
+      ctx.fillRect(leftX, topY, rightX - leftX, height);
+    }
+
+    ctx.restore();
   }
 
   private drawObjectiveSilhouette(
@@ -600,6 +666,15 @@ export class Renderer {
       ctx.arc((leftX + rightX) / 2, bodyTop, capR, Math.PI, 0);
       ctx.closePath();
       ctx.fill();
+      return;
+    }
+    if (kind === 'turret') {
+      // Platform base + vertical barrel.
+      const platformH = h * 0.28;
+      const barrelW = Math.max(1, w * 0.18);
+      const barrelH = h * 0.72;
+      ctx.fillRect(leftX, baseY - platformH, w, platformH);
+      ctx.fillRect((leftX + rightX) / 2 - barrelW / 2, topY, barrelW, barrelH);
       return;
     }
     // Multiplier: a flat sign board on a thin post.
