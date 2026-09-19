@@ -150,15 +150,11 @@ export function buildCorridor(
     switch (spec.shape) {
       case 'straight':
         break;
-      case 'narrow': {
-        // One long taper in and back out, occupying most of the level.
-        const u = featureT(t, at, span);
-        if (u >= 0) hw = LANE_HALF * (1 - (1 - tightness) * bump(u));
-        break;
-      }
+      case 'narrow':
       case 'pinch': {
-        // Same maths, but the template supplies a short span — a hard squeeze
-        // you steer through rather than a stretch you settle into.
+        // Same taper for both: 'pinch' differs only in the short span the
+        // template supplies — a hard squeeze you steer through rather than a
+        // long stretch you settle into.
         const u = featureT(t, at, span);
         if (u >= 0) hw = LANE_HALF * (1 - (1 - tightness) * bump(u));
         break;

@@ -11,8 +11,8 @@ import { DEFAULT_STRUCTURES, LevelDef } from './levels.js';
  * device, or the probe measures one game and the player plays another.
  *
  * Lengths are in world units; at SCROLL_SPEED the shortest is about 50 seconds
- * and the longest about 95. Phase 9 extends this to twenty levels and tunes
- * each one against the probe's per-level win rate.
+ * and the longest about 95. Twelve levels, each tuned against the probe's
+ * per-level win rate.
  */
 export const CAMPAIGN: readonly LevelDef[] = [
   {

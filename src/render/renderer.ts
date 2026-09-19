@@ -440,58 +440,56 @@ export class Renderer {
   private drawGate(gate: Gate): void {
     const ctx = this.ctx;
     const proj = this.projector;
-    {
-      const dz = proj.dz(gate.y);
-      if (dz < -50 || dz > FAR_DZ) return;
-      const fade = nearFade(dz);
-      if (fade <= 0.01) return;
-      ctx.save();
-      ctx.globalAlpha = fade;
+    const dz = proj.dz(gate.y);
+    if (dz < -50 || dz > FAR_DZ) return;
+    const fade = nearFade(dz);
+    if (fade <= 0.01) return;
+    ctx.save();
+    ctx.globalAlpha = fade;
 
-      const halves = [
-        { op: gate.op, x0: gate.cx - GATE_PANEL_W, x1: gate.cx + GATE_PANEL_W },
-      ];
-      for (const half of halves) {
-        const baseL = proj.project(half.x0, gate.y);
-        const baseLX = baseL.x;
-        const baseLY = baseL.y;
-        const scale = baseL.scale;
-        const baseR = proj.project(half.x1, gate.y);
-        if (Math.max(baseLX, baseR.x) < 0 || Math.min(baseLX, baseR.x) > LANE_W) continue;
-        const topY = proj.raise(baseLY, GATE_HEIGHT, scale);
-        const topRY = proj.raise(baseR.y, GATE_HEIGHT, scale);
-
-        const good = gateIsGood(half.op);
-        ctx.fillStyle = good ? 'rgba(60,200,120,0.20)' : 'rgba(220,60,70,0.20)';
-        ctx.beginPath();
-        ctx.moveTo(baseLX, baseLY);
-        ctx.lineTo(baseR.x, baseR.y);
-        ctx.lineTo(baseR.x, topRY);
-        ctx.lineTo(baseLX, topY);
-        ctx.closePath();
-        ctx.fill();
-
-        ctx.fillStyle = good ? '#3ecb7a' : '#e8535f';
-        const barH = Math.max(1, 6 * scale);
-        ctx.fillRect(Math.min(baseLX, baseR.x), Math.min(baseLY, baseR.y) - barH, Math.abs(baseR.x - baseLX), barH);
-
-        const cx = (baseLX + baseR.x) / 2;
-        const cy = (Math.min(baseLY, baseR.y) + Math.min(topY, topRY)) / 2;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#f2f4fa';
-        fitText(
-          ctx,
-          gateLabel(half.op),
-          cx,
-          cy,
-          Math.abs(baseR.x - baseLX) * 0.86,
-          Math.abs(Math.min(baseLY, baseR.y) - Math.min(topY, topRY)) * 0.62,
-          44 * scale,
-        );
-      }
+    const x0 = gate.cx - GATE_PANEL_W;
+    const x1 = gate.cx + GATE_PANEL_W;
+    const baseL = proj.project(x0, gate.y);
+    const baseLX = baseL.x;
+    const baseLY = baseL.y;
+    const scale = baseL.scale;
+    const baseR = proj.project(x1, gate.y);
+    if (Math.max(baseLX, baseR.x) < 0 || Math.min(baseLX, baseR.x) > LANE_W) {
       ctx.restore();
+      return;
     }
+    const topY = proj.raise(baseLY, GATE_HEIGHT, scale);
+    const topRY = proj.raise(baseR.y, GATE_HEIGHT, scale);
+
+    const good = gateIsGood(gate.op);
+    ctx.fillStyle = good ? 'rgba(60,200,120,0.20)' : 'rgba(220,60,70,0.20)';
+    ctx.beginPath();
+    ctx.moveTo(baseLX, baseLY);
+    ctx.lineTo(baseR.x, baseR.y);
+    ctx.lineTo(baseR.x, topRY);
+    ctx.lineTo(baseLX, topY);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = good ? '#3ecb7a' : '#e8535f';
+    const barH = Math.max(1, 6 * scale);
+    ctx.fillRect(Math.min(baseLX, baseR.x), Math.min(baseLY, baseR.y) - barH, Math.abs(baseR.x - baseLX), barH);
+
+    const cx = (baseLX + baseR.x) / 2;
+    const cy = (Math.min(baseLY, baseR.y) + Math.min(topY, topRY)) / 2;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#f2f4fa';
+    fitText(
+      ctx,
+      gateLabel(gate.op),
+      cx,
+      cy,
+      Math.abs(baseR.x - baseLX) * 0.86,
+      Math.abs(Math.min(baseLY, baseR.y) - Math.min(topY, topRY)) * 0.62,
+      44 * scale,
+    );
+    ctx.restore();
   }
 
   /**
@@ -501,85 +499,83 @@ export class Renderer {
   private drawObjective(o: Objective, weaponTier: number): void {
     const ctx = this.ctx;
     const proj = this.projector;
-    {
-      const dz = proj.dz(o.y);
-      if (dz < -50 || dz > FAR_DZ) return;
-      const fade = nearFade(dz);
-      if (fade <= 0.01) return;
+    const dz = proj.dz(o.y);
+    if (dz < -50 || dz > FAR_DZ) return;
+    const fade = nearFade(dz);
+    if (fade <= 0.01) return;
 
-      const base = proj.project(o.x, o.y);
-      const scale = base.scale;
-      const halfW = (OBJECTIVE_W / 2) * scale;
-      // Every cull happens before save(): an early return past it leaks canvas
-      // state, and a leaked globalAlpha silently dims everything drawn after.
-      if (base.x + halfW < 0 || base.x - halfW > LANE_W) return;
+    const base = proj.project(o.x, o.y);
+    const scale = base.scale;
+    const halfW = (OBJECTIVE_W / 2) * scale;
+    // Every cull happens before save(): an early return past it leaks canvas
+    // state, and a leaked globalAlpha silently dims everything drawn after.
+    if (base.x + halfW < 0 || base.x - halfW > LANE_W) return;
 
-      ctx.save();
-      ctx.globalAlpha = fade;
+    ctx.save();
+    ctx.globalAlpha = fade;
 
-      const flash = o.flash;
-      // Cracked open but not yet taken is a live pickup lying in the lane, not
-      // a spent husk: it keeps its colour and its label so the player can see
-      // there is still something there to run over.
-      // Active turrets stay upright — they are not rubble, they are firing.
-      const brokenFlat = o.broken && o.kind !== 'turret';
-      const taken = o.collected;
-      const height = (brokenFlat ? OBJECTIVE_H * 0.22 : OBJECTIVE_H) * scale * (1 + flash * 0.12);
-      const baseX = base.x;
-      const baseY = base.y;
-      const topY = baseY - height;
-      const leftX = baseX - halfW;
-      const rightX = baseX + halfW;
+    const flash = o.flash;
+    // Cracked open but not yet taken is a live pickup lying in the lane, not
+    // a spent husk: it keeps its colour and its label so the player can see
+    // there is still something there to run over.
+    // Active turrets stay upright — they are not rubble, they are firing.
+    const brokenFlat = o.broken && o.kind !== 'turret';
+    const taken = o.collected;
+    const height = (brokenFlat ? OBJECTIVE_H * 0.22 : OBJECTIVE_H) * scale * (1 + flash * 0.12);
+    const baseX = base.x;
+    const baseY = base.y;
+    const topY = baseY - height;
+    const leftX = baseX - halfW;
+    const rightX = baseX + halfW;
 
-      const activeColor = (o.kind === 'turret' && o.broken) ? '#43d9a3' : OBJ_COLOR[o.kind as ObjectiveKind];
-      ctx.fillStyle = taken ? OBJ_BROKEN_COLOR : activeColor;
-      this.drawObjectiveSilhouette(o.kind, leftX, rightX, baseY, topY, scale, brokenFlat);
+    const activeColor = (o.kind === 'turret' && o.broken) ? '#43d9a3' : OBJ_COLOR[o.kind];
+    ctx.fillStyle = taken ? OBJ_BROKEN_COLOR : activeColor;
+    this.drawObjectiveSilhouette(o.kind, leftX, rightX, baseY, topY, scale, brokenFlat);
 
-      if (flash > 0.01) {
-        ctx.fillStyle = `rgba(255,255,255,${Math.min(0.85, flash * 0.85)})`;
-        ctx.fillRect(leftX, topY, rightX - leftX, baseY - topY);
-      }
-
-      // HP / charge bar, just above the billboard.
-      const frac = o.hp / o.maxHp;
-      if (!brokenFlat) {
-        const barW = rightX - leftX;
-        const barH = Math.max(2, 5 * scale);
-        const barY = topY - barH - Math.max(1, 3 * scale);
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillRect(leftX, barY, barW, barH);
-        ctx.fillStyle = '#e8535f';
-        ctx.fillRect(leftX, barY, barW * Math.max(0, Math.min(1, frac)), barH);
-      }
-
-      // Every structure states what it gives. A silhouette alone does not tell
-      // the player whether diverting fire onto it is worth the swarm they let
-      // through, which is the entire decision being asked of them.
-      const label = taken ? 'TAKEN' : objectiveLabel(o, weaponTier);
-      const panelW = (rightX - leftX) * 0.9;
-      const panelH = Math.abs(baseY - topY);
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = taken ? '#7c8394' : '#0d0d12';
-      fitText(ctx, label, baseX, baseY - panelH * 0.55, panelW, panelH * 0.42, 34 * scale);
-
-      if (!taken) {
-        const caption = brokenFlat ? 'RUN OVER IT'
-          : (o.kind === 'turret' && o.broken) ? 'FIRING'
-          : objectiveCaption(o);
-        ctx.fillStyle = 'rgba(255,255,255,0.92)';
-        fitText(
-          ctx,
-          caption,
-          baseX,
-          topY - Math.max(6, 20 * scale),
-          panelW * 1.1,
-          Math.max(5, 15 * scale),
-          15 * scale,
-        );
-      }
-      ctx.restore();
+    if (flash > 0.01) {
+      ctx.fillStyle = `rgba(255,255,255,${Math.min(0.85, flash * 0.85)})`;
+      ctx.fillRect(leftX, topY, rightX - leftX, baseY - topY);
     }
+
+    // HP / charge bar, just above the billboard.
+    if (!brokenFlat) {
+      const frac = o.hp / o.maxHp;
+      const barW = rightX - leftX;
+      const barH = Math.max(2, 5 * scale);
+      const barY = topY - barH - Math.max(1, 3 * scale);
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(leftX, barY, barW, barH);
+      ctx.fillStyle = '#e8535f';
+      ctx.fillRect(leftX, barY, barW * Math.max(0, Math.min(1, frac)), barH);
+    }
+
+    // Every structure states what it gives. A silhouette alone does not tell
+    // the player whether diverting fire onto it is worth the swarm they let
+    // through, which is the entire decision being asked of them.
+    const label = taken ? 'TAKEN' : objectiveLabel(o, weaponTier);
+    const panelW = (rightX - leftX) * 0.9;
+    const panelH = Math.abs(baseY - topY);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = taken ? '#7c8394' : '#0d0d12';
+    fitText(ctx, label, baseX, baseY - panelH * 0.55, panelW, panelH * 0.42, 34 * scale);
+
+    if (!taken) {
+      const caption = brokenFlat ? 'RUN OVER IT'
+        : (o.kind === 'turret' && o.broken) ? 'FIRING'
+        : objectiveCaption(o);
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      fitText(
+        ctx,
+        caption,
+        baseX,
+        topY - Math.max(6, 20 * scale),
+        panelW * 1.1,
+        Math.max(5, 15 * scale),
+        15 * scale,
+      );
+    }
+    ctx.restore();
   }
 
   private drawBarricade(b: Barricade, corridor: Corridor): void {

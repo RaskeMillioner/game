@@ -371,7 +371,7 @@ export function buildLevel(def: LevelDef): LevelPlan {
     ? Math.floor((usable - s.turretFirst) / s.turretSpacing) + 1
     : 0;
   const turrets = turretCount > 0
-    ? buildTurrets(rng, turretCount, s.turretFirst!, s.turretSpacing!, gateYs, corridor)
+    ? buildTurrets(turretCount, s.turretFirst!, s.turretSpacing!, gateYs, corridor)
         .filter((t) => t.y < usable)
     : [];
 
