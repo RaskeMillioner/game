@@ -520,7 +520,9 @@ export class Renderer {
     // there is still something there to run over.
     // Active turrets stay upright — they are not rubble, they are firing.
     const brokenFlat = o.broken && o.kind !== 'turret';
-    const taken = o.collected;
+    // An active turret still fires for TURRET_RANGE after the squad passes it,
+    // so it stays out of the "spent" visual even though `collected` is set.
+    const taken = o.collected && o.kind !== 'turret';
     const height = (brokenFlat ? OBJECTIVE_H * 0.22 : OBJECTIVE_H) * scale * (1 + flash * 0.12);
     const baseX = base.x;
     const baseY = base.y;

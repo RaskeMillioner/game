@@ -148,6 +148,9 @@ export const SQUEEZE_LOOKAHEAD = 600;
 export const MAX_CORPSE = 400;
 export const CORPSE_LIFE = 4.0;
 
+/** Seconds for an objective's or barricade's break-flash to decay from 1 to 0. */
+export const FLASH_DECAY = 0.4;
+
 export const TURRET_FIRE_RATE = 4;
 export const TURRET_BULLET_DAMAGE = 8;
 export const TURRET_BULLET_SPEED = 1000;

@@ -2,7 +2,7 @@ import { Grid } from '../core/grid.js';
 import { Rng } from '../core/rng.js';
 import {
   ANCHOR_FOLLOW, BLUE_FOLLOW, BREAKTHROUGH_PAD, BULLET_RADIUS, BULLET_RANGE, CONTACT_PAD, CORPSE_LIFE,
-  FIRE_COLUMN_FILL, FIRE_FAN_REF, LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
+  FIRE_COLUMN_FILL, FIRE_FAN_REF, FLASH_DECAY, LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
   RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_EDGE_PAD, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
   HAZARD_RATE, SQUEEZE_LOOKAHEAD, START_BLUE, TURRET_BULLET_DAMAGE, TURRET_BULLET_SPEED, TURRET_FIRE_RATE, TURRET_RANGE, WEAPONS,
 } from './config.js';
@@ -216,7 +216,7 @@ export class World {
     this.collideObjectives();
     this.collideBarricades();
     this.collideSquad();
-    this.resolveObjectives();
+    this.resolveObjectives(dt);
     this.stepHazard(dt);
     this.stepBarricades(dt);
     this.stepCorpses(dt);
@@ -365,6 +365,9 @@ export class World {
       this.redX[i] = clampToCorridor(this.corridor, this.redY[i], this.redX[i], RED_SPAWN_EDGE_PAD);
       // A breakthrough is never free: it takes one blue down with it and dies
       // there, so every red you fail to shoot in front of you is a body lost.
+      // `cullY` is a fallback for extreme compression, where `breachY` can sit
+      // below it: an off-screen red is deliberately priced the same as a
+      // breakthrough rather than left to trail the camera forever.
       if (this.redY[i] < breachY || this.redY[i] < cullY) {
         const type = this.redType[i];
         const cost = ENEMIES[type].cost;
@@ -597,19 +600,20 @@ export class World {
   }
 
   /** Settles each objective's reward as the squad draws level with it. */
-  private resolveObjectives(): void {
+  private resolveObjectives(dt: number): void {
     for (const o of this.objectives) {
       if (o.resolved || this.anchorY < o.y) continue;
-      const before = this.rendered;
+      const beforeRendered = this.rendered;
+      const beforeCount = this.count;
       const overlapped = Math.abs(this.anchorX - o.x) <= this.radiusX + PICKUP_PAD;
       const result = collectObjective(o, this.count, this.weaponTier, overlapped);
       this.count = result.count;
       this.weaponTier = result.weaponTier;
-      this.seedNewSlots(before);
-      if (this.count > before) this.gateFlash = 0.35;
+      this.seedNewSlots(beforeRendered);
+      if (this.count > beforeCount) this.gateFlash = 0.35;
     }
     for (const o of this.objectives) {
-      if (o.flash > 0) o.flash = Math.max(0, o.flash - 1 / 30);
+      if (o.flash > 0) o.flash = Math.max(0, o.flash - dt / FLASH_DECAY);
     }
   }
 
@@ -691,7 +695,7 @@ export class World {
 
   private stepBarricades(dt: number): void {
     for (const b of this.barricades) {
-      if (b.flash > 0) b.flash = Math.max(0, b.flash - dt / 0.4);
+      if (b.flash > 0) b.flash = Math.max(0, b.flash - dt / FLASH_DECAY);
     }
   }
 
