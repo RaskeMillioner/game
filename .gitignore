@@ -4,3 +4,4 @@ dist
 *.local
 coverage
 .probe.mjs
+.weapons.mjs

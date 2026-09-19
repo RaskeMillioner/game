@@ -106,6 +106,17 @@ export function collectObjective(
 /** Half-width of the band in which the crowd sweeps up a fallen pickup. */
 export const PICKUP_PAD = 24;
 
+/** Pushes a structure clear of any gate it would otherwise sit on top of. */
+function clearOfGates(y: number, gateYs: readonly number[]): number {
+  for (const gy of gateYs) {
+    const gap = y - gy;
+    if (gap > -MIN_GATE_GAP && gap < MIN_GATE_GAP) {
+      return gap < 0 ? gy - MIN_GATE_GAP : gy + MIN_GATE_GAP;
+    }
+  }
+  return y;
+}
+
 /**
  * Objectives are offset to one side of the lane on purpose: lining one up means
  * leaving the position where your fire covers the swarm.
@@ -119,16 +130,6 @@ export function buildObjectives(
   corridor?: Corridor,
 ): Objective[] {
   const out: Objective[] = [];
-  /** Pushes an objective clear of any gate it would otherwise sit on top of. */
-  const clearOfGates = (y: number): number => {
-    for (const gy of gateYs) {
-      const gap = y - gy;
-      if (gap > -MIN_GATE_GAP && gap < MIN_GATE_GAP) {
-        return gap < 0 ? gy - MIN_GATE_GAP : gy + MIN_GATE_GAP;
-      }
-    }
-    return y;
-  };
   for (let i = 0; i < count; i++) {
     // Weapons are now the only route to a better gun, so crates alternate with
     // pods rather than competing with a third structure for lane space.
@@ -136,7 +137,7 @@ export function buildObjectives(
     const side = rng.next() < 0.5 ? -1 : 1;
     const hp = 240 + i * 240;
     const value = kind === 'weapon' ? 1 : 55 + i * 48;
-    const y = clearOfGates(first + i * spacing);
+    const y = clearOfGates(first + i * spacing, gateYs);
     // Offset to one side of the lane it actually stands in. On a straight lane
     // 0.56 of the half-width is LANE_W * 0.22 and * 0.78 exactly, so this is
     // unchanged there; in a pinch it stays reachable instead of sitting in the
@@ -169,7 +170,6 @@ export function buildObjectives(
  * a fixed HP budget that does not scale with level count.
  */
 export function buildTurrets(
-  _rng: Rng,
   count: number,
   first: number,
   spacing: number,
@@ -177,21 +177,10 @@ export function buildTurrets(
   corridor?: Corridor,
 ): Objective[] {
   const out: Objective[] = [];
-  const clearOfGates = (y: number): number => {
-    for (const gy of gateYs) {
-      const gap = y - gy;
-      if (gap > -MIN_GATE_GAP && gap < MIN_GATE_GAP) {
-        return gap < 0 ? gy - MIN_GATE_GAP : gy + MIN_GATE_GAP;
-      }
-    }
-    return y;
-  };
   for (let i = 0; i < count; i++) {
     // Alternating sides so multiple turrets on a level land on opposite sides.
-    // Using rng only for variety within the alternating pattern avoids all three
-    // turrets drawing the same side (as happened with purely random placement).
     const side = i % 2 === 0 ? -1 : 1;
-    const y = clearOfGates(first + i * spacing);
+    const y = clearOfGates(first + i * spacing, gateYs);
     const centre = corridor ? centreAt(corridor, y) : LANE_W / 2;
     const half = corridor ? halfWidthAt(corridor, y) : LANE_W / 2;
     const x = corridor

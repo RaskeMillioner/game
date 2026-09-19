@@ -238,6 +238,24 @@ describe('hazards', () => {
     }
   });
 
+  it('takes the widest hole where two hazards overlap, never the last one written', () => {
+    // Both hazards cover the same sample range and sit dead centre, so the
+    // only difference is width. Writing holes unconditionally lets whichever
+    // is later in the array silently erase the earlier one; the widest
+    // should win regardless of array order.
+    const narrow: HazardSpec = { at: 0.5, span: 0.2, halfWidth: 80 };
+    const wide: HazardSpec = { at: 0.5, span: 0.2, halfWidth: 150 };
+    const c = buildCorridor(STRAIGHT, LEN, [narrow, wide]);
+    const y = 0.5 * LEN;
+    expect(holeHalfWidthAt(c, y)).toBeCloseTo(150, 0);
+    expect(holeCentreAt(c, y)).toBeCloseTo(LANE_HALF, 0);
+
+    // Order in the array must not matter.
+    const reversed = buildCorridor(STRAIGHT, LEN, [wide, narrow]);
+    expect(holeHalfWidthAt(reversed, y)).toBeCloseTo(150, 0);
+    expect(holeCentreAt(reversed, y)).toBeCloseTo(LANE_HALF, 0);
+  });
+
   it('keeps the squad out of the pit however it is steered', () => {
     const level: LevelDef = { ...(CAMPAIGN[0] as LevelDef), hazards: [HAZARD], length: LEN };
     const w = new World(level, VIEW_H);

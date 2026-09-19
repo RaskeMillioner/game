@@ -3,7 +3,7 @@ import { isUnlocked, Progress, withCleared } from '../app/progress.js';
 import { CAMPAIGN, levelById } from './campaign.js';
 import { SCROLL_SPEED } from './config.js';
 import { isStraight } from './corridor.js';
-import { BRUTE, ENEMY_KINDS, EnemyType } from './enemies.js';
+import { BRUTE, ENEMY_KINDS, EnemyType, EXPLODER, RUNNER } from './enemies.js';
 import { buildLevel, endlessLevel, LevelDef } from './levels.js';
 import { World } from './world.js';
 
@@ -23,8 +23,8 @@ function competent(w: World): void {
 }
 
 /** Plays a level to a conclusion, with a step budget derived from its length. */
-function playOut(level: LevelDef, drive = competent): World {
-  const w = new World(level, VIEW_H);
+function playOut(level: LevelDef, drive = competent, viewH: number = VIEW_H): World {
+  const w = new World(level, viewH);
   const budget = Math.ceil(((level.length / SCROLL_SPEED) * 1.35 + 10) * 60);
   for (let i = 0; i < budget && w.state === 'running'; i++) {
     drive(w);
@@ -52,6 +52,16 @@ describe('no-op guarantee', () => {
 });
 
 describe('level generation', () => {
+  it('never throws building any shipped campaign level', () => {
+    // buildBarricades throws on a barricade whose hole the corridor refused
+    // to write — the right call for a data bug, but only if something catches
+    // it before it reaches a bad LevelDef added to the campaign. This is that
+    // net: every level the game actually ships must build cleanly.
+    for (const level of CAMPAIGN) {
+      expect(() => buildLevel(level)).not.toThrow();
+    }
+  });
+
   it('is reproducible: the same definition generates the same level', () => {
     // The whole campaign rests on this. If level 7 is not level 7 every time,
     // a tuned win rate describes a game nobody plays.
@@ -88,6 +98,30 @@ describe('level generation', () => {
     for (const level of CAMPAIGN) {
       for (const wave of buildLevel(level).waves) {
         expect(level.mix[wave.type] ?? 0).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('never lets a saturated tide starve a template of its scripted bursts', () => {
+    // emitTide and emitBursts used to share one MAX_WAVES cap on the same
+    // array; emitTide ran first, so a level whose tide alone reached that cap
+    // silently dropped every burst — the thing that makes runner-rush,
+    // brute-wall and gauntlet distinct from a plain tide. A pathologically
+    // long level pushes the tide well past what used to be the *shared*
+    // budget; each burst template must still produce at least one wave of
+    // each of its archetypes.
+    const burstTypes: Partial<Record<string, EnemyType[]>> = {
+      'runner-rush': [RUNNER],
+      'brute-wall': [BRUTE],
+      gauntlet: [RUNNER, BRUTE, EXPLODER],
+    };
+    for (const level of CAMPAIGN) {
+      const types = burstTypes[level.template];
+      if (!types) continue;
+      const saturated: LevelDef = { ...level, length: 5_000_000 };
+      const { waves } = buildLevel(saturated);
+      for (const type of types) {
+        expect(waves.some((w) => w.type === type)).toBe(true);
       }
     }
   });
@@ -207,6 +241,36 @@ describe('the campaign', () => {
     expect(last).toBeLessThan(first);
     // Not near-zero either: the finale is meant to be beatable, not a wall.
     expect(last).toBeGreaterThan(0.2);
+  }, 60_000);
+
+  it('is independent of the viewport: win rate is stable across viewH', () => {
+    // `viewH` is the viewport's own aspect ratio in disguise (`LANE_W *
+    // cssH / cssW`), so a level tuned against one device's viewH must play
+    // the same on a tablet or in landscape — 960 and 2100 bracket the
+    // practical range either side of the reference 1560.
+    const level = CAMPAIGN[8] as LevelDef;
+    const winRate = (viewH: number, seeds: number): number => {
+      let won = 0;
+      for (let i = 0; i < seeds; i++) {
+        const seeded = { ...level, seed: (level.seed + i * 2654435761) >>> 0 };
+        if (playOut(seeded, competent, viewH).state === 'won') won++;
+      }
+      return won / seeds;
+    };
+    const reference = winRate(1560, 15);
+    const tablet = winRate(960, 15);
+    const landscape = winRate(2100, 15);
+    expect(Math.abs(tablet - reference)).toBeLessThanOrEqual(0.15);
+    expect(Math.abs(landscape - reference)).toBeLessThanOrEqual(0.15);
+  }, 60_000);
+
+  it('never saturates MAX_RED under the reference strategy', () => {
+    // Spawning silently stops at MAX_RED, so a swarm that saturates it would
+    // quietly flatten late-run difficulty with nothing to say so. This is the
+    // regression guard for that failure mode staying invisible.
+    for (const level of CAMPAIGN) {
+      expect(playOut(level).droppedSpawns).toBe(0);
+    }
   }, 60_000);
 });
 

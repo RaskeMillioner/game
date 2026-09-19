@@ -17,8 +17,4 @@ export class Rng {
   range(a: number, b: number): number {
     return a + this.next() * (b - a);
   }
-
-  int(n: number): number {
-    return Math.floor(this.next() * n);
-  }
 }

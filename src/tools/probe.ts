@@ -210,7 +210,7 @@ const strategies: Record<string, Strategy> = {
 interface Result {
   seconds: number; kills: number; peak: number; died: boolean; won: boolean;
   broken: number; passed: number; leak: number; hazard: number;
-  turretKills: number;
+  turretKills: number; droppedSpawns: number;
   leaksByType: number[]; killsByType: number[]; contactsByType: number[];
 }
 
@@ -244,6 +244,7 @@ function runLevel(strategy: Strategy, level: LevelDef): Result {
     leak: w.kills + w.leaked > 0 ? w.leaked / (w.kills + w.leaked) : 0,
     hazard: w.hazardLosses,
     turretKills: w.turretKills,
+    droppedSpawns: w.droppedSpawns,
     leaksByType: Array.from(w.leaksByType),
     killsByType: Array.from(w.killsByType),
     contactsByType: Array.from(w.contactsByType),
@@ -338,7 +339,7 @@ function targetWin(index: number, total: number): number {
   return total < 2 ? WIN_LAST : WIN_FIRST + (WIN_LAST - WIN_FIRST) * (index / (total - 1));
 }
 
-console.log('\nlevel                  template     diff   len   win%  target   mean(s)  peak   leak%   pit   flag');
+console.log('\nlevel                  template     diff   len   win%  target   mean(s)  peak   leak%   pit  dropped   flag');
 const curve: number[] = [];
 for (const [index, level] of CAMPAIGN.entries()) {
   const results: Result[] = [];
@@ -356,6 +357,7 @@ for (const [index, level] of CAMPAIGN.entries()) {
     ` ${avg(results, (r) => r.seconds).toFixed(1).padStart(8)}` +
     ` ${avg(results, (r) => r.peak).toFixed(0).padStart(6)} ${(avg(results, (r) => r.leak) * 100).toFixed(1).padStart(6)}%` +
     ` ${avg(results, (r) => r.hazard).toFixed(0).padStart(6)}` +
+    ` ${avg(results, (r) => r.droppedSpawns).toFixed(0).padStart(8)}` +
     `   ${flag}`,
   );
 }

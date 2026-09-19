@@ -150,15 +150,11 @@ export function buildCorridor(
     switch (spec.shape) {
       case 'straight':
         break;
-      case 'narrow': {
-        // One long taper in and back out, occupying most of the level.
-        const u = featureT(t, at, span);
-        if (u >= 0) hw = LANE_HALF * (1 - (1 - tightness) * bump(u));
-        break;
-      }
+      case 'narrow':
       case 'pinch': {
-        // Same maths, but the template supplies a short span — a hard squeeze
-        // you steer through rather than a stretch you settle into.
+        // Same taper for both: 'pinch' differs only in the short span the
+        // template supplies — a hard squeeze you steer through rather than a
+        // long stretch you settle into.
         const u = featureT(t, at, span);
         if (u >= 0) hw = LANE_HALF * (1 - (1 - tightness) * bump(u));
         break;
@@ -205,7 +201,11 @@ export function buildCorridor(
       const roomLeft = (hc - (c - hw)) - MIN_SPAN_HALF * 2;
       const roomRight = ((c + hw) - hc) - MIN_SPAN_HALF * 2;
       const allowed = Math.max(0, Math.min(grown, roomLeft, roomRight));
-      if (allowed <= 0) continue;
+      // Two hazards overlapping the same sample otherwise let the later one
+      // in `hazards` silently erase the earlier one's hole — the first
+      // hazard's `Barricade`/hazard record would then point at ground that
+      // belongs to something else. Widest hole wins instead.
+      if (allowed <= 0 || allowed <= holeHalfWidth[i]) continue;
       holeCentre[i] = hc;
       holeHalfWidth[i] = allowed;
     }
@@ -214,34 +214,37 @@ export function buildCorridor(
   return { step: CORRIDOR_STEP, centre, halfWidth, holeCentre, holeHalfWidth };
 }
 
-/** Index and blend factor for a world position. Clamps at both ends. */
-function sample(c: Corridor, y: number): { i: number; j: number; f: number } {
+/**
+ * Linearly interpolates one sampled array at a world position, clamped at both
+ * ends. Inlines the index/blend lookup that `centreAt` and its siblings share
+ * rather than handing it back as an allocated `{ i, j, f }` record: this runs
+ * up to a few thousand times a frame (once per red, per accessor), and that
+ * was the GC pressure the typed-array design otherwise exists to avoid.
+ */
+function lerpAt(arr: Float32Array, c: Corridor, y: number): number {
   const last = c.centre.length - 1;
-  if (!(y > 0)) return { i: 0, j: 0, f: 0 };
+  if (!(y > 0)) return arr[0];
   const raw = y / c.step;
-  if (raw >= last) return { i: last, j: last, f: 0 };
+  if (raw >= last) return arr[last];
   const i = raw | 0;
-  return { i, j: i + 1, f: raw - i };
+  const a = arr[i];
+  return a + (arr[i + 1] - a) * (raw - i);
 }
 
 export function centreAt(c: Corridor, y: number): number {
-  const { i, j, f } = sample(c, y);
-  return c.centre[i] + (c.centre[j] - c.centre[i]) * f;
+  return lerpAt(c.centre, c, y);
 }
 
 export function halfWidthAt(c: Corridor, y: number): number {
-  const { i, j, f } = sample(c, y);
-  return c.halfWidth[i] + (c.halfWidth[j] - c.halfWidth[i]) * f;
+  return lerpAt(c.halfWidth, c, y);
 }
 
 export function holeCentreAt(c: Corridor, y: number): number {
-  const { i, j, f } = sample(c, y);
-  return c.holeCentre[i] + (c.holeCentre[j] - c.holeCentre[i]) * f;
+  return lerpAt(c.holeCentre, c, y);
 }
 
 export function holeHalfWidthAt(c: Corridor, y: number): number {
-  const { i, j, f } = sample(c, y);
-  return c.holeHalfWidth[i] + (c.holeHalfWidth[j] - c.holeHalfWidth[i]) * f;
+  return lerpAt(c.holeHalfWidth, c, y);
 }
 
 /**

@@ -116,8 +116,6 @@ export function buildGates(
   return gates;
 }
 
-export const GATE_MID = LANE_W / 2;
-
 /**
  * Slides `x` out of the hazard at `y`, if there is one, onto the middle of
  * whichever side has more room for something `pad` wide. Shared by gates and

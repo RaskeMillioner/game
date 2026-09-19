@@ -2,8 +2,8 @@ import { Grid } from '../core/grid.js';
 import { Rng } from '../core/rng.js';
 import {
   ANCHOR_FOLLOW, BLUE_FOLLOW, BREAKTHROUGH_PAD, BULLET_RADIUS, BULLET_RANGE, CONTACT_PAD, CORPSE_LIFE,
-  FIRE_COLUMN_FILL, FIRE_FAN_REF, LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
-  RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_EDGE_PAD, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
+  FIRE_COLUMN_FILL, FIRE_FAN_REF, FLASH_DECAY, LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
+  RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_EDGE_PAD, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SPAWN_AHEAD, SQUAD_AHEAD,
   HAZARD_RATE, SQUEEZE_LOOKAHEAD, START_BLUE, TURRET_BULLET_DAMAGE, TURRET_BULLET_SPEED, TURRET_FIRE_RATE, TURRET_RANGE, WEAPONS,
 } from './config.js';
 import { ENEMIES, ENEMY_KINDS } from './enemies.js';
@@ -60,6 +60,13 @@ export class World {
   leaked = 0;
   /** Bodies lost inside hazards. Priced separately so the probe can attribute them. */
   hazardLosses = 0;
+  /**
+   * Reds a wave asked to spawn but couldn't, because MAX_RED was already
+   * saturated. Headroom here is a correctness concern, not just a memory
+   * one: a saturated cap silently flattens late-run difficulty, and without
+   * this counter nothing would ever say so.
+   */
+  droppedSpawns = 0;
   /** Fraction of the crowd currently standing in a hazard, for the renderer. */
   hazardOverlap = 0;
   /** Sub-body remainder of the hazard toll, carried between frames. */
@@ -117,6 +124,8 @@ export class World {
   private readonly lineFront = new Float32Array(MAX_EMITTERS);
   private fireTimer = 0;
   private squadSettled = false;
+  /** Backing field for the `squeeze` getter; refreshed twice per `step()`. */
+  private cachedSqueeze = 1;
 
   constructor(level: LevelDef, viewH: number) {
     this.level = level;
@@ -144,8 +153,20 @@ export class World {
   /**
    * How hard the crowd is currently squeezed by the corridor. 1 in open lane,
    * so everything derived from it is unchanged on a straight level.
+   *
+   * Cached rather than recomputed on every read: `radiusX`, `radiusY`,
+   * `stepSquad`, `seedNewSlots` and `buildFiringLine` all read this within the
+   * same tick, and each read cost five lookahead samples of the corridor.
+   * `step()` refreshes the cache exactly where the live getter used to be
+   * evaluated — once before `stepAnchor` moves `anchorX`, once after — so a
+   * cached read returns the same value the getter would have computed at that
+   * point in the frame.
    */
   get squeeze(): number {
+    return this.cachedSqueeze;
+  }
+
+  private computeSqueeze(): number {
     // The tightest span within sight ahead, not just the one underfoot.
     //
     // Reading only the current position made a hazard an unavoidable toll
@@ -200,10 +221,16 @@ export class World {
 
     this.time += dt;
     this.cameraY += SCROLL_SPEED * dt;
-    this.anchorY = this.cameraY + this.viewH * SQUAD_SCREEN_FRAC;
+    this.anchorY = this.cameraY + SQUAD_AHEAD;
     if (this.gateFlash > 0) this.gateFlash = Math.max(0, this.gateFlash - dt);
 
+    // Refreshed once before `stepAnchor` (which reads `radiusX` while `anchorX`
+    // still holds last frame's value) and once after (for every reader for the
+    // rest of the tick), matching the two distinct values the old per-call
+    // getter would have produced at each point.
+    this.cachedSqueeze = this.computeSqueeze();
     this.stepAnchor(dt);
+    this.cachedSqueeze = this.computeSqueeze();
     this.stepSquad(dt);
     this.stepGates();
     this.spawnReds();
@@ -216,7 +243,7 @@ export class World {
     this.collideObjectives();
     this.collideBarricades();
     this.collideSquad();
-    this.resolveObjectives();
+    this.resolveObjectives(dt);
     this.stepHazard(dt);
     this.stepBarricades(dt);
     this.stepCorpses(dt);
@@ -310,13 +337,14 @@ export class World {
   }
 
   private spawnWave(wave: SpawnWave): void {
-    const spawnY = this.cameraY + this.viewH + 60;
+    const spawnY = this.anchorY + SPAWN_AHEAD;
     const stats = ENEMIES[wave.type];
     const frontage = Math.min(
       RED_SPAWN_SPREAD,
       Math.max(RED_SPAWN_MIN_SPREAD, this.radiusX * RED_SPAWN_RADIUS_GAIN + 70),
     ) * wave.spread;
-    for (let i = 0; i < wave.count && this.redCount < MAX_RED; i++) {
+    let i = 0;
+    for (; i < wave.count && this.redCount < MAX_RED; i++) {
       const j = this.redCount++;
       this.redType[j] = wave.type;
       this.redHp[j] = wave.hp;
@@ -329,6 +357,7 @@ export class World {
       this.redSpeed[j] = this.rng.range(stats.speedMin, stats.speedMax);
       this.redOff[j] = this.rng.range(-1, 1);
     }
+    this.droppedSpawns += wave.count - i;
   }
 
   /**
@@ -365,6 +394,9 @@ export class World {
       this.redX[i] = clampToCorridor(this.corridor, this.redY[i], this.redX[i], RED_SPAWN_EDGE_PAD);
       // A breakthrough is never free: it takes one blue down with it and dies
       // there, so every red you fail to shoot in front of you is a body lost.
+      // `cullY` is a fallback for extreme compression, where `breachY` can sit
+      // below it: an off-screen red is deliberately priced the same as a
+      // breakthrough rather than left to trail the camera forever.
       if (this.redY[i] < breachY || this.redY[i] < cullY) {
         const type = this.redType[i];
         const cost = ENEMIES[type].cost;
@@ -420,12 +452,13 @@ export class World {
     const cols = Math.min(n, MAX_EMITTERS);
     const r = this.radiusX;
     const span = r * 2 || 1;
+    const sq = this.squeeze;
     for (let c = 0; c < cols; c++) {
       this.lineSlot[c] = -1;
       this.lineFront[c] = -Infinity;
     }
     for (let i = 0; i < n; i++) {
-      let c = (((slotX[i] * this.squeeze + r) / span) * cols) | 0;
+      let c = (((slotX[i] * sq + r) / span) * cols) | 0;
       if (c < 0) c = 0;
       else if (c >= cols) c = cols - 1;
       if (slotY[i] > this.lineFront[c]) {
@@ -584,8 +617,11 @@ export class World {
     for (const o of this.objectives) {
       if (o.resolved || o.broken) continue;
       const dy = o.y - this.anchorY;
-      if (dy < -OBJECTIVE_H || dy > 1400) continue;
+      if (dy < -OBJECTIVE_H || dy > BULLET_RANGE) continue;
       for (let i = 0; i < this.bulletCount; i++) {
+        // Turret fire is a reward for flipping one, not free demolition of
+        // whatever else shares its column.
+        if (this.bulFromTurret[i]) continue;
         if (Math.abs(this.bulX[i] - o.x) > halfW) continue;
         if (Math.abs(this.bulY[i] - o.y) > OBJECTIVE_H / 2) continue;
         damageObjective(o, this.bulDmg[i]);
@@ -597,19 +633,20 @@ export class World {
   }
 
   /** Settles each objective's reward as the squad draws level with it. */
-  private resolveObjectives(): void {
+  private resolveObjectives(dt: number): void {
     for (const o of this.objectives) {
       if (o.resolved || this.anchorY < o.y) continue;
-      const before = this.rendered;
+      const beforeRendered = this.rendered;
+      const beforeCount = this.count;
       const overlapped = Math.abs(this.anchorX - o.x) <= this.radiusX + PICKUP_PAD;
       const result = collectObjective(o, this.count, this.weaponTier, overlapped);
       this.count = result.count;
       this.weaponTier = result.weaponTier;
-      this.seedNewSlots(before);
-      if (this.count > before) this.gateFlash = 0.35;
+      this.seedNewSlots(beforeRendered);
+      if (this.count > beforeCount) this.gateFlash = 0.35;
     }
     for (const o of this.objectives) {
-      if (o.flash > 0) o.flash = Math.max(0, o.flash - 1 / 30);
+      if (o.flash > 0) o.flash = Math.max(0, o.flash - dt / FLASH_DECAY);
     }
   }
 
@@ -650,7 +687,12 @@ export class World {
   private stepTurrets(dt: number): void {
     for (const o of this.objectives) {
       if (o.kind !== 'turret' || !o.broken) continue;
-      if (Math.abs(this.anchorY - o.y) > TURRET_RANGE) continue;
+      // Ahead by more than TURRET_RANGE: not yet in range. Behind by more than
+      // the crowd's own depth: the squad has fully passed it, so its bullets
+      // would only be firing forward into empty lane behind the crowd rather
+      // than into the swarm.
+      const ahead = this.anchorY - o.y;
+      if (ahead < -TURRET_RANGE || ahead > this.radiusY) continue;
       o.fireTimer += dt;
       const interval = 1 / TURRET_FIRE_RATE;
       while (o.fireTimer >= interval) {
@@ -691,7 +733,7 @@ export class World {
 
   private stepBarricades(dt: number): void {
     for (const b of this.barricades) {
-      if (b.flash > 0) b.flash = Math.max(0, b.flash - dt / 0.4);
+      if (b.flash > 0) b.flash = Math.max(0, b.flash - dt / FLASH_DECAY);
     }
   }
 

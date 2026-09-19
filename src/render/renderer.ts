@@ -52,9 +52,9 @@ const GATE_HEIGHT = 130;
  * about to pass through otherwise balloons across the whole screen — and by
  * then the choice is already made, so there is nothing left to read.
  */
-// The squad plane sits at dz ~603 (CAM_BACK + viewH*SQUAD_SCREEN_FRAC), so a
-// gate is fully readable right up to the moment the crowd reaches it and only
-// then fades, rather than sailing on toward the lens at screen-filling size.
+// The squad plane sits at dz ~603 (CAM_BACK + SQUAD_AHEAD), so a gate is
+// fully readable right up to the moment the crowd reaches it and only then
+// fades, rather than sailing on toward the lens at screen-filling size.
 const FADE_NEAR = 400;
 const FADE_FULL = 620;
 
@@ -309,6 +309,11 @@ export class Renderer {
    * The hazard, punched out of the ground that was just drawn. Cut from the
    * lane rather than stood on top of it, so it reads as somewhere you cannot
    * go instead of as another billboard to shoot.
+   *
+   * Two hazards visible in the same frame are two separate holes, so each
+   * contiguous run of samples with a hole is flushed as its own polygon
+   * rather than joined into one shape spanning the gap between them — a gap
+   * whose slots would otherwise hold stale coordinates from a previous frame.
    */
   private drawHazard(corridor: Corridor, dzBottom: number): void {
     const proj = this.projector;
@@ -316,14 +321,17 @@ export class Renderer {
     const ly = this.hazLY;
     const rx = this.hazRX;
     const ry = this.hazRY;
-    let lo = -1;
-    let hi = -1;
+    let runLo = -1;
     for (let i = 0; i <= GROUND_STEPS; i++) {
       const f = i / GROUND_STEPS;
       const dz = dzBottom + (FAR_DZ - dzBottom) * f * f;
       const worldY = proj.camY + dz;
       const hw = holeHalfWidthAt(corridor, worldY);
-      if (hw <= 0) continue;
+      if (hw <= 0) {
+        if (runLo >= 0) this.fillHazardRun(runLo, i - 1);
+        runLo = -1;
+        continue;
+      }
       const hc = holeCentreAt(corridor, worldY);
       // Each projection read straight out into scalars: `project` hands back a
       // single reused record, which is what broke the finish line in phase 5.
@@ -333,11 +341,17 @@ export class Renderer {
       const r = proj.project(hc + hw, worldY);
       rx[i] = r.x;
       ry[i] = r.y;
-      if (lo < 0) lo = i;
-      hi = i;
+      if (runLo < 0) runLo = i;
     }
-    if (lo < 0 || hi <= lo) return;
+    if (runLo >= 0) this.fillHazardRun(runLo, GROUND_STEPS);
+  }
 
+  private fillHazardRun(lo: number, hi: number): void {
+    if (hi <= lo) return;
+    const lx = this.hazLX;
+    const ly = this.hazLY;
+    const rx = this.hazRX;
+    const ry = this.hazRY;
     const ctx = this.ctx;
     ctx.fillStyle = COL_HAZARD;
     ctx.beginPath();
@@ -440,58 +454,56 @@ export class Renderer {
   private drawGate(gate: Gate): void {
     const ctx = this.ctx;
     const proj = this.projector;
-    {
-      const dz = proj.dz(gate.y);
-      if (dz < -50 || dz > FAR_DZ) return;
-      const fade = nearFade(dz);
-      if (fade <= 0.01) return;
-      ctx.save();
-      ctx.globalAlpha = fade;
+    const dz = proj.dz(gate.y);
+    if (dz < -50 || dz > FAR_DZ) return;
+    const fade = nearFade(dz);
+    if (fade <= 0.01) return;
+    ctx.save();
+    ctx.globalAlpha = fade;
 
-      const halves = [
-        { op: gate.op, x0: gate.cx - GATE_PANEL_W, x1: gate.cx + GATE_PANEL_W },
-      ];
-      for (const half of halves) {
-        const baseL = proj.project(half.x0, gate.y);
-        const baseLX = baseL.x;
-        const baseLY = baseL.y;
-        const scale = baseL.scale;
-        const baseR = proj.project(half.x1, gate.y);
-        if (Math.max(baseLX, baseR.x) < 0 || Math.min(baseLX, baseR.x) > LANE_W) continue;
-        const topY = proj.raise(baseLY, GATE_HEIGHT, scale);
-        const topRY = proj.raise(baseR.y, GATE_HEIGHT, scale);
-
-        const good = gateIsGood(half.op);
-        ctx.fillStyle = good ? 'rgba(60,200,120,0.20)' : 'rgba(220,60,70,0.20)';
-        ctx.beginPath();
-        ctx.moveTo(baseLX, baseLY);
-        ctx.lineTo(baseR.x, baseR.y);
-        ctx.lineTo(baseR.x, topRY);
-        ctx.lineTo(baseLX, topY);
-        ctx.closePath();
-        ctx.fill();
-
-        ctx.fillStyle = good ? '#3ecb7a' : '#e8535f';
-        const barH = Math.max(1, 6 * scale);
-        ctx.fillRect(Math.min(baseLX, baseR.x), Math.min(baseLY, baseR.y) - barH, Math.abs(baseR.x - baseLX), barH);
-
-        const cx = (baseLX + baseR.x) / 2;
-        const cy = (Math.min(baseLY, baseR.y) + Math.min(topY, topRY)) / 2;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#f2f4fa';
-        fitText(
-          ctx,
-          gateLabel(half.op),
-          cx,
-          cy,
-          Math.abs(baseR.x - baseLX) * 0.86,
-          Math.abs(Math.min(baseLY, baseR.y) - Math.min(topY, topRY)) * 0.62,
-          44 * scale,
-        );
-      }
+    const x0 = gate.cx - GATE_PANEL_W;
+    const x1 = gate.cx + GATE_PANEL_W;
+    const baseL = proj.project(x0, gate.y);
+    const baseLX = baseL.x;
+    const baseLY = baseL.y;
+    const scale = baseL.scale;
+    const baseR = proj.project(x1, gate.y);
+    if (Math.max(baseLX, baseR.x) < 0 || Math.min(baseLX, baseR.x) > LANE_W) {
       ctx.restore();
+      return;
     }
+    const topY = proj.raise(baseLY, GATE_HEIGHT, scale);
+    const topRY = proj.raise(baseR.y, GATE_HEIGHT, scale);
+
+    const good = gateIsGood(gate.op);
+    ctx.fillStyle = good ? 'rgba(60,200,120,0.20)' : 'rgba(220,60,70,0.20)';
+    ctx.beginPath();
+    ctx.moveTo(baseLX, baseLY);
+    ctx.lineTo(baseR.x, baseR.y);
+    ctx.lineTo(baseR.x, topRY);
+    ctx.lineTo(baseLX, topY);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = good ? '#3ecb7a' : '#e8535f';
+    const barH = Math.max(1, 6 * scale);
+    ctx.fillRect(Math.min(baseLX, baseR.x), Math.min(baseLY, baseR.y) - barH, Math.abs(baseR.x - baseLX), barH);
+
+    const cx = (baseLX + baseR.x) / 2;
+    const cy = (Math.min(baseLY, baseR.y) + Math.min(topY, topRY)) / 2;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#f2f4fa';
+    fitText(
+      ctx,
+      gateLabel(gate.op),
+      cx,
+      cy,
+      Math.abs(baseR.x - baseLX) * 0.86,
+      Math.abs(Math.min(baseLY, baseR.y) - Math.min(topY, topRY)) * 0.62,
+      44 * scale,
+    );
+    ctx.restore();
   }
 
   /**
@@ -501,85 +513,85 @@ export class Renderer {
   private drawObjective(o: Objective, weaponTier: number): void {
     const ctx = this.ctx;
     const proj = this.projector;
-    {
-      const dz = proj.dz(o.y);
-      if (dz < -50 || dz > FAR_DZ) return;
-      const fade = nearFade(dz);
-      if (fade <= 0.01) return;
+    const dz = proj.dz(o.y);
+    if (dz < -50 || dz > FAR_DZ) return;
+    const fade = nearFade(dz);
+    if (fade <= 0.01) return;
 
-      const base = proj.project(o.x, o.y);
-      const scale = base.scale;
-      const halfW = (OBJECTIVE_W / 2) * scale;
-      // Every cull happens before save(): an early return past it leaks canvas
-      // state, and a leaked globalAlpha silently dims everything drawn after.
-      if (base.x + halfW < 0 || base.x - halfW > LANE_W) return;
+    const base = proj.project(o.x, o.y);
+    const scale = base.scale;
+    const halfW = (OBJECTIVE_W / 2) * scale;
+    // Every cull happens before save(): an early return past it leaks canvas
+    // state, and a leaked globalAlpha silently dims everything drawn after.
+    if (base.x + halfW < 0 || base.x - halfW > LANE_W) return;
 
-      ctx.save();
-      ctx.globalAlpha = fade;
+    ctx.save();
+    ctx.globalAlpha = fade;
 
-      const flash = o.flash;
-      // Cracked open but not yet taken is a live pickup lying in the lane, not
-      // a spent husk: it keeps its colour and its label so the player can see
-      // there is still something there to run over.
-      // Active turrets stay upright — they are not rubble, they are firing.
-      const brokenFlat = o.broken && o.kind !== 'turret';
-      const taken = o.collected;
-      const height = (brokenFlat ? OBJECTIVE_H * 0.22 : OBJECTIVE_H) * scale * (1 + flash * 0.12);
-      const baseX = base.x;
-      const baseY = base.y;
-      const topY = baseY - height;
-      const leftX = baseX - halfW;
-      const rightX = baseX + halfW;
+    const flash = o.flash;
+    // Cracked open but not yet taken is a live pickup lying in the lane, not
+    // a spent husk: it keeps its colour and its label so the player can see
+    // there is still something there to run over.
+    // Active turrets stay upright — they are not rubble, they are firing.
+    const brokenFlat = o.broken && o.kind !== 'turret';
+    // An active turret still fires for TURRET_RANGE after the squad passes it,
+    // so it stays out of the "spent" visual even though `collected` is set.
+    const taken = o.collected && o.kind !== 'turret';
+    const height = (brokenFlat ? OBJECTIVE_H * 0.22 : OBJECTIVE_H) * scale * (1 + flash * 0.12);
+    const baseX = base.x;
+    const baseY = base.y;
+    const topY = baseY - height;
+    const leftX = baseX - halfW;
+    const rightX = baseX + halfW;
 
-      const activeColor = (o.kind === 'turret' && o.broken) ? '#43d9a3' : OBJ_COLOR[o.kind as ObjectiveKind];
-      ctx.fillStyle = taken ? OBJ_BROKEN_COLOR : activeColor;
-      this.drawObjectiveSilhouette(o.kind, leftX, rightX, baseY, topY, scale, brokenFlat);
+    const activeColor = (o.kind === 'turret' && o.broken) ? '#43d9a3' : OBJ_COLOR[o.kind];
+    ctx.fillStyle = taken ? OBJ_BROKEN_COLOR : activeColor;
+    this.drawObjectiveSilhouette(o.kind, leftX, rightX, baseY, topY, scale, brokenFlat);
 
-      if (flash > 0.01) {
-        ctx.fillStyle = `rgba(255,255,255,${Math.min(0.85, flash * 0.85)})`;
-        ctx.fillRect(leftX, topY, rightX - leftX, baseY - topY);
-      }
-
-      // HP / charge bar, just above the billboard.
-      const frac = o.hp / o.maxHp;
-      if (!brokenFlat) {
-        const barW = rightX - leftX;
-        const barH = Math.max(2, 5 * scale);
-        const barY = topY - barH - Math.max(1, 3 * scale);
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillRect(leftX, barY, barW, barH);
-        ctx.fillStyle = '#e8535f';
-        ctx.fillRect(leftX, barY, barW * Math.max(0, Math.min(1, frac)), barH);
-      }
-
-      // Every structure states what it gives. A silhouette alone does not tell
-      // the player whether diverting fire onto it is worth the swarm they let
-      // through, which is the entire decision being asked of them.
-      const label = taken ? 'TAKEN' : objectiveLabel(o, weaponTier);
-      const panelW = (rightX - leftX) * 0.9;
-      const panelH = Math.abs(baseY - topY);
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = taken ? '#7c8394' : '#0d0d12';
-      fitText(ctx, label, baseX, baseY - panelH * 0.55, panelW, panelH * 0.42, 34 * scale);
-
-      if (!taken) {
-        const caption = brokenFlat ? 'RUN OVER IT'
-          : (o.kind === 'turret' && o.broken) ? 'FIRING'
-          : objectiveCaption(o);
-        ctx.fillStyle = 'rgba(255,255,255,0.92)';
-        fitText(
-          ctx,
-          caption,
-          baseX,
-          topY - Math.max(6, 20 * scale),
-          panelW * 1.1,
-          Math.max(5, 15 * scale),
-          15 * scale,
-        );
-      }
-      ctx.restore();
+    if (flash > 0.01) {
+      ctx.fillStyle = `rgba(255,255,255,${Math.min(0.85, flash * 0.85)})`;
+      ctx.fillRect(leftX, topY, rightX - leftX, baseY - topY);
     }
+
+    // HP / charge bar, just above the billboard.
+    if (!brokenFlat) {
+      const frac = o.hp / o.maxHp;
+      const barW = rightX - leftX;
+      const barH = Math.max(2, 5 * scale);
+      const barY = topY - barH - Math.max(1, 3 * scale);
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(leftX, barY, barW, barH);
+      ctx.fillStyle = '#e8535f';
+      ctx.fillRect(leftX, barY, barW * Math.max(0, Math.min(1, frac)), barH);
+    }
+
+    // Every structure states what it gives. A silhouette alone does not tell
+    // the player whether diverting fire onto it is worth the swarm they let
+    // through, which is the entire decision being asked of them.
+    const label = taken ? 'TAKEN' : objectiveLabel(o, weaponTier);
+    const panelW = (rightX - leftX) * 0.9;
+    const panelH = Math.abs(baseY - topY);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = taken ? '#7c8394' : '#0d0d12';
+    fitText(ctx, label, baseX, baseY - panelH * 0.55, panelW, panelH * 0.42, 34 * scale);
+
+    if (!taken) {
+      const caption = brokenFlat ? 'RUN OVER IT'
+        : (o.kind === 'turret' && o.broken) ? 'FIRING'
+        : objectiveCaption(o);
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      fitText(
+        ctx,
+        caption,
+        baseX,
+        topY - Math.max(6, 20 * scale),
+        panelW * 1.1,
+        Math.max(5, 15 * scale),
+        15 * scale,
+      );
+    }
+    ctx.restore();
   }
 
   private drawBarricade(b: Barricade, corridor: Corridor): void {
@@ -903,8 +915,11 @@ export class Renderer {
   /**
    * The level select. Drawn in flat screen space with no world behind it, so it
    * shares nothing with `draw` beyond the canvas itself.
+   *
+   * `error`, when set, is a level that failed to build — surfaced here rather
+   * than left to a console message nobody but a developer will ever see.
    */
-  drawMenu(layout: MenuLayout): void {
+  drawMenu(layout: MenuLayout, error?: string | null): void {
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const s = this.canvas.width / LANE_W;
@@ -922,6 +937,16 @@ export class Renderer {
     ctx.fillStyle = '#7c8394';
     ctx.font = `600 ${Math.round(24 * s)}px system-ui, -apple-system, sans-serif`;
     ctx.fillText('SELECT A LEVEL', this.canvas.width / 2, layout.titleY + 52 * s);
+
+    if (error) {
+      ctx.fillStyle = 'rgba(226,83,95,0.16)';
+      const bannerH = 46 * s;
+      const bannerY = layout.titleY + 90 * s;
+      ctx.fillRect(0, bannerY, this.canvas.width, bannerH);
+      ctx.fillStyle = COL_RED;
+      ctx.font = `600 ${Math.round(19 * s)}px system-ui, -apple-system, sans-serif`;
+      fitText(ctx, error, this.canvas.width / 2, bannerY + bannerH / 2, this.canvas.width * 0.9, bannerH * 0.7, 19 * s);
+    }
 
     for (const tile of layout.tiles) {
       const cx = tile.x + tile.w / 2;

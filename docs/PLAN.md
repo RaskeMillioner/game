@@ -13,7 +13,7 @@ lane has a shape, and it can split around something you have to steer past.
 
 ## 1. Where the code is
 
-Playable and deployed at `raskemillioner.github.io/game/`. 34 kB, 12 kB gzipped, no runtime dependencies.
+Playable and deployed at `raskemillioner.github.io/game/`. 43.94 kB, 15.46 kB gzipped, no runtime dependencies.
 
 | Built | Notes |
 |---|---|
@@ -30,7 +30,7 @@ Playable and deployed at `raskemillioner.github.io/game/`. 34 kB, 12 kB gzipped,
 | Campaign | Twelve levels, level select, next-level unlock persisted in `localStorage` |
 | Corridor | Lane shape over `worldY`: narrowing, pinches and bends; the crowd compresses to fit |
 | Hazards | Pits that split the lane into two spans; the crowd funnels down to thread one |
-| Balance harness | Headless seeded probe: strategy survival, per-type attribution, and per-level win rate against a target ramp; 48 tests |
+| Balance harness | Headless seeded probe: strategy survival, per-type attribution, and per-level win rate against a target ramp; 75 tests |
 
 **Not built:** new structure kinds, bosses, audio, juice.
 
@@ -83,8 +83,8 @@ static per-type table: hp, speed range, contact cost, radius, shade. Shipped val
 |---|---|---|---|---|
 | Grunt | 1 | 110–155 | 1 blue | The tide. What exists today |
 | Runner | 1 | 260–320 | 1 blue | Arrives early and punishes a player lined up on a crate |
-| Brute | 40–200 | 70–90 | 6 blue | Soaks the line; decide whether to spend fire on it or reposition |
-| Exploder | 2 | 150–190 | 8 blue | Makes a leak frightening rather than a slow drip |
+| Brute | 40–200 | 70–90 | 4 blue | Soaks the line; decide whether to spend fire on it or reposition |
+| Exploder | 2 | 150–190 | 5 blue | Makes a leak frightening rather than a slow drip |
 
 The damage model changed with it: a bullet's `pierce` budget is a damage pool, and each red
 consumes `min(hp, remaining)`. For 1-HP enemies that is identical to the old behaviour, so
