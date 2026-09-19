@@ -7,11 +7,11 @@
  *     --outfile=.probe.mjs && node .probe.mjs
  */
 import { CAMPAIGN } from '../sim/campaign.js';
-import { LANE_W, SCROLL_SPEED } from '../sim/config.js';
+import { LANE_W, SCROLL_SPEED, TURRET_RANGE } from '../sim/config.js';
 import { ENEMIES, ENEMY_KINDS } from '../sim/enemies.js';
 import { gateIsGood, GATE_PANEL_W } from '../sim/gates.js';
 import { centreAt, halfWidthAt, holeCentreAt, holeHalfWidthAt } from '../sim/corridor.js';
-import { endlessLevel, LevelDef } from '../sim/levels.js';
+import { DEFAULT_STRUCTURES, endlessLevel, LevelDef } from '../sim/levels.js';
 import { World } from '../sim/world.js';
 
 const VIEW_H = 1560;
@@ -145,7 +145,7 @@ function barricadeShooter(commit: number): Strategy {
   return (w, t) => {
     const b = w.barricades.find((x) => !x.broken && x.y > w.anchorY - 50);
     if (b && b.y - w.anchorY < commit) {
-      w.targetX = b.holeCentre;
+      w.targetX = holeCentreAt(w.corridor, b.y);
       return;
     }
     fallback(w, t);
@@ -153,15 +153,40 @@ function barricadeShooter(commit: number): Strategy {
 }
 
 /**
- * Same as `obj-light` but ignores turret objectives — measures turret value
- * by comparing against the strategy that takes everything else.
+ * Lines up on an unbroken turret within TURRET_RANGE to break it as fast as
+ * possible, then falls back to normal objective play.
  */
-function noTurret(commit: number): Strategy {
-  const fallback = gateSeeker(true);
+function turretSeek(commit: number): Strategy {
+  const fallback = objectiveSeeker(commit);
   return (w, t) => {
-    const o = w.objectives.find((x) => x.kind !== 'turret' && !x.resolved && x.y > w.anchorY - 50);
-    if (o && o.y - w.anchorY < commit) {
-      w.targetX = o.x;
+    const turret = w.objectives.find(
+      (o) => o.kind === 'turret' && !o.broken && !o.resolved &&
+             Math.abs(o.y - w.anchorY) < TURRET_RANGE,
+    );
+    if (turret) {
+      w.targetX = turret.x;
+      return;
+    }
+    fallback(w, t);
+  };
+}
+
+/**
+ * Steers away from any turret that is within TURRET_RANGE, whether or not it
+ * has been flipped. Measures whether the turret is a meaningful decision by
+ * comparing against turret-seek: a turret that is not a decision cannot
+ * separate these two.
+ */
+function turretAvoid(commit: number): Strategy {
+  const fallback = objectiveSeeker(commit);
+  return (w, t) => {
+    const turret = w.objectives.find(
+      (o) => o.kind === 'turret' && Math.abs(o.y - w.anchorY) < TURRET_RANGE,
+    );
+    if (turret) {
+      const centre = centreAt(w.corridor, w.anchorY);
+      const half = halfWidthAt(w.corridor, w.anchorY);
+      w.targetX = turret.x < centre ? centre + half * 0.7 : centre - half * 0.7;
       return;
     }
     fallback(w, t);
@@ -178,7 +203,8 @@ const strategies: Record<string, Strategy> = {
   'pit-aware': pitAware(900),
   'obj-pit': objectivePitSeeker(900),
   'barricade-shoot': barricadeShooter(900),
-  'no-turret': noTurret(900),
+  'turret-seek': turretSeek(900),
+  'turret-avoid': turretAvoid(900),
 };
 
 interface Result {
@@ -386,50 +412,78 @@ for (const name of ['passive', 'obj-light', 'obj-pit', 'pit-aware'] as const) {
 }
 
 /**
- * Turret value: does flipping a turret contribute meaningfully to clearing
- * the level? Measures turret kills and win rate on level 7, which has them,
- * against a strategy that ignores them.
+ * Turret value: two measurements, as the plan requires.
+ *
+ * a. Is the turret worth anything? Level with turrets vs the same level built
+ *    with DEFAULT_STRUCTURES (no turrets), same seed and difficulty. A result
+ *    that is identical to the digit means turrets contribute nothing.
+ *
+ * b. Is the turret a decision? turret-seek (lines up to break it) vs
+ *    turret-avoid (steers to the far side). If seek does not out-perform avoid,
+ *    there is no habit to acquire and the feature is not interactive.
+ *
+ * Report both. If neither separates, the honest recommendation is to cut
+ * turrets (see PLAN.md for the pre-authorised answer).
  */
-console.log('\nturret value (level 7)');
-console.log('strategy        turret kills   win%');
+console.log('\nturret value');
+console.log('lvl  measurement        strategy        turret kills   win%');
 {
-  const level7 = CAMPAIGN.find((l) => l.id === 7)!;
-  for (const name of ['obj-light', 'no-turret'] as const) {
-    let tKills = 0;
-    let won = 0;
-    const runs = 20;
-    for (let i = 0; i < runs; i++) {
-      const r = runLevel(strategies[name] as Strategy, { ...level7, seed: (level7.seed + i * 2654435761) >>> 0 });
-      tKills += r.turretKills;
-      if (r.won) won++;
+  const turretLevels = CAMPAIGN.filter((l) => l.structures.turretFirst != null);
+  const runs = 20;
+  for (const level of turretLevels) {
+    // a. With turrets (obj-light) vs without turrets (obj-light)
+    const withWithout: [string, LevelDef][] = [
+      ['a: with turrets  ', level],
+      ['a: no turrets    ', { ...level, structures: DEFAULT_STRUCTURES }],
+    ];
+    for (const [label, def] of withWithout) {
+      let tKills = 0; let won = 0;
+      for (let i = 0; i < runs; i++) {
+        const r = runLevel(strategies['obj-light'] as Strategy, { ...(def as LevelDef), seed: (level.seed + i * 2654435761) >>> 0 });
+        tKills += r.turretKills;
+        if (r.won) won++;
+      }
+      console.log(`${String(level.id).padStart(3)}  ${label.padEnd(18)} ${'obj-light'.padEnd(14)} ${(tKills / runs).toFixed(1).padStart(13)} ${((won / runs) * 100).toFixed(0).padStart(6)}%`);
     }
-    console.log(
-      `${name.padEnd(14)} ${(tKills / runs).toFixed(1).padStart(13)} ${((won / runs) * 100).toFixed(0).padStart(6)}%`,
-    );
+    // b. turret-seek vs turret-avoid
+    for (const name of ['turret-seek', 'turret-avoid'] as const) {
+      let tKills = 0; let won = 0;
+      for (let i = 0; i < runs; i++) {
+        const r = runLevel(strategies[name] as Strategy, { ...level, seed: (level.seed + i * 2654435761) >>> 0 });
+        tKills += r.turretKills;
+        if (r.won) won++;
+      }
+      console.log(`${String(level.id).padStart(3)}  ${'b: decision'.padEnd(18)} ${name.padEnd(14)} ${(tKills / runs).toFixed(1).padStart(13)} ${((won / runs) * 100).toFixed(0).padStart(6)}%`);
+    }
+    console.log('');
   }
 }
 
 /**
- * Barricade value: does breaking the wall pay off? Level 10 has one.
- * The barricade-dodge strategy (obj-pit) avoids the hazard; barricade-shoot
- * breaks it. If shoot wins more than dodge, spending fire on it earns its place.
+ * Barricade value: does breaking the wall pay off?
+ * barricade-shoot aims for the hole centre; obj-pit routes around hazards;
+ * obj-light ignores both. If shoot wins more than dodge, spending fire earns
+ * its place. Run on all levels that have barricades.
  */
-console.log('\nbarricade value (level 10)');
-console.log('strategy           win%   hazard losses');
+console.log('\nbarricade value (levels with barricades)');
+console.log('lvl  strategy           win%   hazard losses');
 {
-  const level10 = CAMPAIGN.find((l) => l.id === 10)!;
-  for (const name of ['obj-light', 'obj-pit', 'barricade-shoot'] as const) {
-    let won = 0;
-    let hazard = 0;
-    const runs = 20;
-    for (let i = 0; i < runs; i++) {
-      const r = runLevel(strategies[name] as Strategy, { ...level10, seed: (level10.seed + i * 2654435761) >>> 0 });
-      if (r.won) won++;
-      hazard += r.hazard;
+  const barricadeLevels = CAMPAIGN.filter((l) => (l.barricades?.length ?? 0) > 0);
+  const runs = 20;
+  for (const level of barricadeLevels) {
+    for (const name of ['obj-light', 'obj-pit', 'barricade-shoot'] as const) {
+      let won = 0;
+      let hazard = 0;
+      for (let i = 0; i < runs; i++) {
+        const r = runLevel(strategies[name] as Strategy, { ...level, seed: (level.seed + i * 2654435761) >>> 0 });
+        if (r.won) won++;
+        hazard += r.hazard;
+      }
+      console.log(
+        `${String(level.id).padStart(3)}  ${name.padEnd(18)} ${((won / runs) * 100).toFixed(0).padStart(5)}%` +
+        ` ${(hazard / runs).toFixed(0).padStart(14)}`,
+      );
     }
-    console.log(
-      `${name.padEnd(18)} ${((won / runs) * 100).toFixed(0).padStart(5)}%` +
-      ` ${(hazard / runs).toFixed(0).padStart(14)}`,
-    );
+    console.log('');
   }
 }

@@ -84,6 +84,11 @@ export const CAMPAIGN: readonly LevelDef[] = [
     length: 16000,
     mix: { [GRUNT]: 1, [RUNNER]: 0.35, [EXPLODER]: 0.10 },
     structures: DEFAULT_STRUCTURES,
+    // Barricade sits in the open straight lane ahead of the exploders,
+    // so breaking it is a decision rather than a freebie at full width.
+    barricades: [
+      { at: 0.35, span: 0.06, halfWidth: 145, hp: 450 },
+    ],
   },
   {
     id: 7,
@@ -113,7 +118,7 @@ export const CAMPAIGN: readonly LevelDef[] = [
     difficulty: 0.67,
     length: 19000,
     mix: { [GRUNT]: 1, [RUNNER]: 0.3, [EXPLODER]: 0.07, [BRUTE]: 0.09 },
-    structures: DEFAULT_STRUCTURES,
+    structures: { ...DEFAULT_STRUCTURES, turretFirst: 4500, turretSpacing: 7500 },
   },
   {
     id: 10,
@@ -134,7 +139,9 @@ export const CAMPAIGN: readonly LevelDef[] = [
       { at: 0.70, span: 0.15, halfWidth: 120 },
     ],
     barricades: [
-      { at: 0.52, span: 0.06, halfWidth: 160, hp: 600 },
+      // Verified: at t=0.85 the lane half-width is ~360, hole half-width 159.6,
+      // leaving ~200 on either side — well above MIN_SPAN_HALF.
+      { at: 0.85, span: 0.06, halfWidth: 160, hp: 600 },
     ],
   },
   {

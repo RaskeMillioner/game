@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { CAMPAIGN } from './campaign.js';
 import { LANE_W, SCROLL_SPEED } from './config.js';
 import {
-  buildCorridor, centreAt, clampToCorridor, CorridorSpec, halfWidthAt, HazardSpec,
+  BarricadeSpec, barricadeToSampleRange, buildCorridor, centreAt, clampToCorridor,
+  clearBarricadeHole, CORRIDOR_STEP, CorridorSpec, halfWidthAt, HazardSpec,
   hazardOverlap, holeCentreAt, holeHalfWidthAt, isStraight, LANE_HALF, leftAt,
   MIN_HALF_WIDTH, MIN_SPAN_HALF, rightAt, spanHalfWidthAt, spansAt,
   SQUEEZE_THRESHOLD, STRAIGHT,
@@ -310,6 +311,49 @@ describe('hazards', () => {
     const crossing = run((w, i) => { w.targetX = (i / 90) % 2 < 1 ? 120 : 600; });
 
     expect(threading).toBeLessThan(crossing / 2);
+  });
+});
+
+describe('barricades', () => {
+  it('every campaign barricade opens a real hole with both spans at or above MIN_SPAN_HALF', () => {
+    for (const level of CAMPAIGN) {
+      if (!level.barricades?.length) continue;
+      const plan = buildLevel(level);
+      expect(plan.barricades.length).toBe(level.barricades.length);
+      for (const b of plan.barricades) {
+        const hw = holeHalfWidthAt(plan.corridor, b.y);
+        expect(hw).toBeGreaterThan(0);
+        const hc = holeCentreAt(plan.corridor, b.y);
+        const cen = centreAt(plan.corridor, b.y);
+        const half = halfWidthAt(plan.corridor, b.y);
+        const leftSpan = (hc - hw) - (cen - half);
+        const rightSpan = (cen + half) - (hc + hw);
+        expect(leftSpan).toBeGreaterThanOrEqual(MIN_SPAN_HALF - 0.5);
+        expect(rightSpan).toBeGreaterThanOrEqual(MIN_SPAN_HALF - 0.5);
+      }
+    }
+  });
+
+  it('clearBarricadeHole zeroes exactly [sampleLo, sampleHi] and leaves all other samples unchanged', () => {
+    const spec: BarricadeSpec = { at: 0.5, span: 0.06, halfWidth: 130, hp: 400 };
+    const c = buildCorridor(STRAIGHT, LEN, [spec]);
+    const [lo, hi] = barricadeToSampleRange(spec, LEN, CORRIDOR_STEP);
+
+    expect(holeHalfWidthAt(c, LEN * 0.5)).toBeGreaterThan(0);
+
+    const outsideBefore = Array.from(c.holeHalfWidth);
+
+    clearBarricadeHole(c, lo, hi);
+
+    for (let i = lo; i <= hi; i++) {
+      expect(c.holeHalfWidth[i]).toBe(0);
+    }
+    expect(holeHalfWidthAt(c, LEN * 0.5)).toBe(0);
+    for (let i = 0; i < c.holeHalfWidth.length; i++) {
+      if (i < lo || i > hi) {
+        expect(c.holeHalfWidth[i]).toBe(outsideBefore[i]);
+      }
+    }
   });
 });
 

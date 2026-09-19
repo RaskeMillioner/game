@@ -169,7 +169,7 @@ export function buildObjectives(
  * a fixed HP budget that does not scale with level count.
  */
 export function buildTurrets(
-  rng: Rng,
+  _rng: Rng,
   count: number,
   first: number,
   spacing: number,
@@ -187,19 +187,26 @@ export function buildTurrets(
     return y;
   };
   for (let i = 0; i < count; i++) {
-    const side = rng.next() < 0.5 ? -1 : 1;
+    // Alternating sides so multiple turrets on a level land on opposite sides.
+    // Using rng only for variety within the alternating pattern avoids all three
+    // turrets drawing the same side (as happened with purely random placement).
+    const side = i % 2 === 0 ? -1 : 1;
     const y = clearOfGates(first + i * spacing);
     const centre = corridor ? centreAt(corridor, y) : LANE_W / 2;
     const half = corridor ? halfWidthAt(corridor, y) : LANE_W / 2;
     const x = corridor
       ? clearOfHole(corridor, y, centre + side * half * 0.56, OBJECTIVE_W / 2, centre, half)
       : centre + side * half * 0.56;
+    // HP ramps with index: turrets get cheaper in relative fire-cost terms as the
+    // level progresses, but absolute HP rises so a late-level squad still has to
+    // commit. Same intent as crate HP ramping.
+    const hp = 280 + i * 200;
     out.push({
       kind: 'turret',
       x,
       y,
-      maxHp: 320,
-      hp: 320,
+      maxHp: hp,
+      hp,
       value: 0,
       broken: false,
       flash: 0,

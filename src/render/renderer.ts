@@ -433,7 +433,7 @@ export class Renderer {
     for (const item of order) {
       if (item.gate) this.drawGate(item.gate);
       else if (item.objective) this.drawObjective(item.objective, w.weaponTier);
-      else if (item.barricade) this.drawBarricade(item.barricade);
+      else if (item.barricade) this.drawBarricade(item.barricade, w.corridor);
     }
   }
 
@@ -582,7 +582,7 @@ export class Renderer {
     }
   }
 
-  private drawBarricade(b: Barricade): void {
+  private drawBarricade(b: Barricade, corridor: Corridor): void {
     const ctx = this.ctx;
     const proj = this.projector;
     const dz = proj.dz(b.y);
@@ -590,9 +590,12 @@ export class Renderer {
     const fade = nearFade(dz);
     if (fade <= 0.01) return;
 
-    const base = proj.project(b.holeCentre, b.y);
+    const hc = holeCentreAt(corridor, b.y);
+    const hw = holeHalfWidthAt(corridor, b.y);
+    if (hw <= 0) return;
+    const base = proj.project(hc, b.y);
     const scale = base.scale;
-    const halfW = b.holeHalfWidth * scale;
+    const halfW = hw * scale;
     if (base.x + halfW < 0 || base.x - halfW > LANE_W) return;
 
     ctx.save();

@@ -8,7 +8,7 @@ import {
 } from './config.js';
 import { ENEMIES, ENEMY_KINDS } from './enemies.js';
 import {
-  clampToCorridor, Corridor, centreAt, hazardOverlap, spanHalfWidthAt,
+  clampToCorridor, Corridor, centreAt, hazardOverlap, holeCentreAt, holeHalfWidthAt, spanHalfWidthAt,
 } from './corridor.js';
 import { formationRadius, formationSqueeze, slotLag, slotX, slotY } from './formation.js';
 import { applyGate, Gate, gateHit } from './gates.js';
@@ -485,6 +485,7 @@ export class World {
         }
         this.bulLife[j] = BULLET_RANGE / w.speed;
         this.bulDmg[j] = perBullet;
+        this.bulFromTurret[j] = 0;
       }
     }
   }
@@ -648,7 +649,7 @@ export class World {
    */
   private stepTurrets(dt: number): void {
     for (const o of this.objectives) {
-      if (o.kind !== 'turret' || !o.broken || o.resolved) continue;
+      if (o.kind !== 'turret' || !o.broken) continue;
       if (Math.abs(this.anchorY - o.y) > TURRET_RANGE) continue;
       o.fireTimer += dt;
       const interval = 1 / TURRET_FIRE_RATE;
@@ -674,7 +675,11 @@ export class World {
       for (let i = 0; i < this.bulletCount; i++) {
         if (this.bulFromTurret[i]) continue;
         if (Math.abs(this.bulY[i] - b.y) > b.yHalf) continue;
-        if (Math.abs(this.bulX[i] - b.holeCentre) > b.holeHalfWidth) continue;
+        // Read the hole at the bullet's own y — the hole is a bump that tapers
+        // over its span, so a single peak rectangle over-covers at the edges.
+        const hc = holeCentreAt(this.corridor, this.bulY[i]);
+        const hw = holeHalfWidthAt(this.corridor, this.bulY[i]);
+        if (hw <= 0 || Math.abs(this.bulX[i] - hc) > hw) continue;
         const dmg = this.bulDmg[i];
         this.removeBullet(i);
         i--;

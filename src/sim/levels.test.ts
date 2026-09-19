@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { isUnlocked, Progress, withCleared } from '../app/progress.js';
 import { CAMPAIGN, levelById } from './campaign.js';
 import { SCROLL_SPEED } from './config.js';
+import { isStraight } from './corridor.js';
 import { BRUTE, ENEMY_KINDS, EnemyType } from './enemies.js';
 import { buildLevel, endlessLevel, LevelDef } from './levels.js';
 import { World } from './world.js';
@@ -31,6 +32,24 @@ function playOut(level: LevelDef, drive = competent): World {
   }
   return w;
 }
+
+describe('no-op guarantee', () => {
+  it('a level without barricades or turrets produces zero of each', () => {
+    for (const level of CAMPAIGN) {
+      if ((level.barricades?.length ?? 0) > 0 || level.structures.turretFirst != null) continue;
+      const plan = buildLevel(level);
+      expect(plan.barricades).toHaveLength(0);
+      expect(plan.objectives.filter((o) => o.kind === 'turret')).toHaveLength(0);
+    }
+  });
+
+  it('isStraight still holds on every level with no corridor spec and no barricades', () => {
+    for (const level of CAMPAIGN) {
+      if (level.corridor || (level.barricades?.length ?? 0) > 0) continue;
+      expect(isStraight(buildLevel(level).corridor)).toBe(true);
+    }
+  });
+});
 
 describe('level generation', () => {
   it('is reproducible: the same definition generates the same level', () => {

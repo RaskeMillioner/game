@@ -8,10 +8,6 @@ export interface Barricade {
   readonly y: number;
   /** Half-span in world y units. */
   readonly yHalf: number;
-  /** x centre of the wall at its widest point, for display and hit testing. */
-  readonly holeCentre: number;
-  /** x half-width at the widest point. */
-  readonly holeHalfWidth: number;
   /** First corridor sample index this barricade covers. */
   readonly sampleLo: number;
   /** Last corridor sample index this barricade covers. */
@@ -30,26 +26,23 @@ export function buildBarricades(
 ): Barricade[] {
   return specs.map((spec) => {
     const [sampleLo, sampleHi] = barricadeToSampleRange(spec, length, CORRIDOR_STEP);
-    // Find the sample with the largest hole — that is the peak of the barricade.
-    let peakHw = 0;
-    let peakHc = 0;
+    // A barricade whose hole the corridor refused to write is a level data bug:
+    // the position is too narrow to leave MIN_SPAN_HALF on either side. Fail
+    // loudly at level-build time rather than fabricating coordinates that silently
+    // put the barricade outside the lane.
+    let hasHole = false;
     for (let i = sampleLo; i <= sampleHi && i < corridor.holeHalfWidth.length; i++) {
-      if (corridor.holeHalfWidth[i] > peakHw) {
-        peakHw = corridor.holeHalfWidth[i];
-        peakHc = corridor.holeCentre[i];
-      }
+      if (corridor.holeHalfWidth[i] > 0) { hasHole = true; break; }
     }
-    if (peakHw === 0) {
-      // Spec produced no hole (too narrow for MIN_SPAN_HALF constraints); fall
-      // back to the spec's own values so the barricade at least exists visually.
-      peakHw = spec.halfWidth;
-      peakHc = spec.at * length;
+    if (!hasHole) {
+      throw new Error(
+        `Barricade at t=${spec.at} (halfWidth=${spec.halfWidth}) produced no hole. ` +
+        `The lane is too narrow there to leave MIN_SPAN_HALF on both sides.`,
+      );
     }
     return {
       y: spec.at * length,
       yHalf: (spec.span / 2) * length,
-      holeCentre: peakHc,
-      holeHalfWidth: peakHw,
       sampleLo,
       sampleHi,
       maxHp: spec.hp,
