@@ -309,6 +309,11 @@ export class Renderer {
    * The hazard, punched out of the ground that was just drawn. Cut from the
    * lane rather than stood on top of it, so it reads as somewhere you cannot
    * go instead of as another billboard to shoot.
+   *
+   * Two hazards visible in the same frame are two separate holes, so each
+   * contiguous run of samples with a hole is flushed as its own polygon
+   * rather than joined into one shape spanning the gap between them — a gap
+   * whose slots would otherwise hold stale coordinates from a previous frame.
    */
   private drawHazard(corridor: Corridor, dzBottom: number): void {
     const proj = this.projector;
@@ -316,14 +321,17 @@ export class Renderer {
     const ly = this.hazLY;
     const rx = this.hazRX;
     const ry = this.hazRY;
-    let lo = -1;
-    let hi = -1;
+    let runLo = -1;
     for (let i = 0; i <= GROUND_STEPS; i++) {
       const f = i / GROUND_STEPS;
       const dz = dzBottom + (FAR_DZ - dzBottom) * f * f;
       const worldY = proj.camY + dz;
       const hw = holeHalfWidthAt(corridor, worldY);
-      if (hw <= 0) continue;
+      if (hw <= 0) {
+        if (runLo >= 0) this.fillHazardRun(runLo, i - 1);
+        runLo = -1;
+        continue;
+      }
       const hc = holeCentreAt(corridor, worldY);
       // Each projection read straight out into scalars: `project` hands back a
       // single reused record, which is what broke the finish line in phase 5.
@@ -333,11 +341,17 @@ export class Renderer {
       const r = proj.project(hc + hw, worldY);
       rx[i] = r.x;
       ry[i] = r.y;
-      if (lo < 0) lo = i;
-      hi = i;
+      if (runLo < 0) runLo = i;
     }
-    if (lo < 0 || hi <= lo) return;
+    if (runLo >= 0) this.fillHazardRun(runLo, GROUND_STEPS);
+  }
 
+  private fillHazardRun(lo: number, hi: number): void {
+    if (hi <= lo) return;
+    const lx = this.hazLX;
+    const ly = this.hazLY;
+    const rx = this.hazRX;
+    const ry = this.hazRY;
     const ctx = this.ctx;
     ctx.fillStyle = COL_HAZARD;
     ctx.beginPath();
