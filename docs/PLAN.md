@@ -457,6 +457,107 @@ All twelve levels inside the ±12 point tolerance. The ten levels with neither t
 barricades are unchanged to the digit, through phase 7 and through aiming the turrets after
 it.
 
+### Feedback — designed, not built
+
+Phase 8 is the first phase whose output the probe cannot score. Everything since phase 4 has
+been answerable by a number; screen shake is not. That makes two things matter more than
+usual: the sim must stay exactly as measurable as it is today, and the phase has to be
+specified tightly enough that "it feels better" is not the only acceptance test.
+
+It runs in two stages, because the layer phase 8 rewrites is the layer three open
+correctness bugs live in.
+
+#### 8a — clear the correctness backlog first
+
+`docs/CODE_REVIEW.md` carries six P0 bugs. Three of them (§1 viewport-coupled balance, §4
+turret bullets breaking objectives for free, §5 objectives unhittable past 1400) put wrong
+numbers into the probe that every level is tuned against, and §4 is the evidence turrets
+were kept on at all. Three more (§2 `gateFlash` on every objective passed, §3 two hazards
+rendering as one garbage polygon, §11 frame-coupled inconsistent flash decay) are *inside*
+the feedback layer, so building juice on top of them means building on a wrong trigger and
+a decay that is already two different durations for no reason.
+
+Order is the review's own, and each group ships on its own commit:
+
+| Group | Items | Guard |
+|---|---|---|
+| Clear bugs, small diffs | §2, §11, §14 | existing suite |
+| Renderer | §3 | screenshot level 10 around world y 14000–17000 |
+| Sim behaviour | §4, §5 | probe before/after, recorded in the commit message |
+| Performance, bit-identical | §7, §8 | the determinism tests |
+| Structural | §1 | a cross-`viewH` test, written first |
+| Defensive | §6 | `buildLevel` over every campaign entry |
+
+§1 is the one that changes what a player experiences: the distance reds spawn ahead is
+`viewH * 0.78 + 60`, so a tablet gets 37% less reaction time and landscape is unplayable
+today. It goes last, alone, with its test written first.
+
+**The campaign is retuned after 8a, not during it.** §4 and §5 both move win rates, and a
+level whose difficulty was changed in the same commit as the bug that moved it cannot be
+attributed afterwards. Record the probe's before and after tables; retune only what leaves
+its band.
+
+#### 8b — juice and audio
+
+**The sim does not learn about any of this.** Juice reads; it never writes. Screen shake is
+a renderer-space offset and must never touch `cameraY` or `anchorY`, which are the sim's
+clock — a camera that shakes the anchor changes where the crowd stands and therefore what
+the probe measures.
+
+What juice needs that the sim does not currently expose is *one-shot events*: this red got
+through, that barricade broke, this pod was collected. Counters have already moved by the
+time the renderer sees them, and a counter cannot say where on screen it happened.
+
+**A write-only event ring.** Fixed-capacity typed arrays on `World` — kind, x, y, magnitude
+— that the sim pushes to and nothing in the sim ever reads. Because nothing reads it, every
+outcome stays bit-identical and the probe is untouched; a test asserts exactly that, by
+running a level with the ring drained and undrained and comparing kills, count, state and
+`anchorY`. Fixed capacity means no allocation on the hot path and no unbounded growth at
+3200 reds; overflow drops events and bumps a counter rather than growing.
+
+**Kills are not events.** A good run kills 10,503 reds in 71 seconds — about 150 a second.
+Emitting one event per kill would swamp the ring and produce a popup blizzard that reads as
+noise. Events are for what *costs or pays*: a contact, a leak, a pickup, a structure
+breaking, a hazard toll, the finish. Kill density is a counter delta the renderer can read
+per frame, and it drives intensity rather than discrete feedback.
+
+**Popups price bodies, not damage.** "Damage popups" in the phase table was the wrong noun
+carried over from a genre this game is not in. The number the player needs is blues lost and
+blues gained — `-6` for a brute, `-8` for an exploder, `+55` for a pod, the weapon's name for
+a crate. Pooled to a fixed cap, no allocation.
+
+**Hit flash cannot be per-unit.** 3200 reds are drawn as one `Path2D` per type, and per-unit
+flash state would undo the batching phase 4 was careful to get. The corpse system already
+records deaths; drawing recent corpses bright for their first few frames buys the same read
+for no new state. The flash that matters most is on the *crowd* when it takes a contact,
+which is one object, once.
+
+**Audio is synthesized, and there are no files.** A WebAudio module under `src/audio/`,
+never imported by anything in `src/sim/`, so headless runs and the probe cannot depend on
+it. Three constraints that decide whether it ships working:
+
+- **It must unlock on a gesture.** iOS will not start an `AudioContext` without one. The
+  first `pointerdown` resumes it; before that the game is silent and that is correct.
+- **It must be voice-capped.** A minigun at 14 rounds a second across 26 emitters is
+  thousands of triggers a second. One sound per volley with a minimum interval, and a hard
+  ceiling on concurrent voices.
+- **It must be mutable, and remember.** A phone game with no mute is a phone game people
+  close. The toggle persists next to the campaign progress in `localStorage`.
+
+**Motion is a preference.** `prefers-reduced-motion` cuts shake and popup travel. This is
+the cheapest accessibility work in the project and it belongs with the code that introduces
+the motion, not in a later pass.
+
+#### What would make phase 8 wrong
+
+The probe cannot score this phase, so these are the failure conditions to watch for instead:
+
+- Any measured win rate moving in 8b. If juice changes a number, juice is in the sim.
+- Frame time on a real phone at 3200 reds. Juice that costs frames is a downgrade whatever
+  it looks like in a screenshot.
+- Feedback that fires when nothing happened — §2 is exactly that bug, and the phase that
+  fixes it is the phase most able to reintroduce it.
+
 ## 4. Phases
 
 | # | Phase | Output | Owner |
@@ -466,20 +567,19 @@ it.
 | 6a | ~~Corridor~~ | **Done.** Corridor over worldY, narrowing, pinches and bends; crowd compression | Me |
 | 6b | ~~Hazards~~ | **Done.** Pits that split the corridor into two spans; proportional toll for standing in one | Me |
 | 7 | ~~Structures~~ | **Done.** Barricades that must be broken or dodged; turrets to free, since retargeted onto the nearest red | Sonnet |
-| 8 | Juice + audio | Screen shake, hit flash, damage popups, synthesized SFX, no audio files | Sonnet |
+| 8a | Correctness pass | Clear the six P0 bugs in `docs/CODE_REVIEW.md`, retune whatever leaves its band | Sonnet |
+| 8b | Juice + audio | Write-only event ring, screen shake, hit flash, body-count popups, synthesized SFX, mute | Sonnet |
 | 9 | Content pass | 20 levels generated, measured and tuned against the probe | Me |
 | 10 | Forks | Corridor returning multiple spans; only if levels feel same-y without it | Me |
 
-**Phase 8 is next.** Phase 7 shipped as specified — a barricade is a hazard with hit points,
-a turret is a friendly emitter, and a level that names neither is unchanged to the digit —
-except that the turret stopped being *static*: it now tracks the nearest red, which is what
-turned it from a measured non-decision into the best decision on level 7.
+**Phase 8 is next**, and is specified above. It runs in two stages: 8a clears the six P0
+bugs in `docs/CODE_REVIEW.md`, because three of them corrupt the probe everything else is
+tuned against and three more sit inside the feedback layer 8b rewrites. 8b then adds juice
+and audio on top of a sim it never writes to.
 
-Before phase 8, `docs/CODE_REVIEW.md` is an unexecuted backlog with six P0 correctness bugs
-in it, three of which (§1 viewport-coupled balance, §4 turret bullets damaging objectives,
-§5 objectives unhittable past 1400) put wrong numbers into the probe everything else is tuned
-against. Phase 9 is blocked on it: retuning twelve levels against a probe with those bugs in
-it bakes them into the campaign.
+Phase 9 was already blocked on that backlog — retuning twelve levels against a probe with
+§4 and §5 in it bakes both into the campaign — so 8a unblocks phase 9 as a side effect of
+making phase 8 worth building.
 
 Phase 9 inherits a working per-level harness rather than building one, and extends the
 campaign from twelve levels to twenty.
@@ -575,6 +675,19 @@ about skill counts until it has survived the same treatment.
   the levels that gain content will drift up the win-rate ramp and need their difficulty
   lifted. That lift has to come from the enemies — handing a level weaker gates to
   compensate would break the rule that a level's growth curve is the same every time.
+- **Phase 8 is the first phase the probe cannot score.** Every phase since 4 could be
+  argued with a number. Juice cannot, which makes it the easiest phase to declare finished
+  while it is still bad, and the easiest to gold-plate. The guard is negative: no measured
+  win rate may move in 8b, and frame time on a real phone at 3200 reds is the budget.
+- **Juice leaking into the sim would be invisible until phase 9.** A camera offset applied
+  to `cameraY`, or an event the sim reads back, changes outcomes without failing to compile.
+  The write-only ring and the determinism test exist for this one failure mode.
+- **8a moves win rates, and 8b must not.** Two stages that touch the same files, where one
+  is expected to change the numbers and the other is forbidden to. Retuning in 8a's own
+  commits, separately from the fixes, is what keeps the attribution readable.
+- **Audio is the part most likely to ship broken and unnoticed.** It is silent until a
+  gesture, silent when muted, and silent on a headless run — three legitimate silences that
+  look exactly like a fourth, illegitimate one.
 
 ## 7. Open question for the next playtest
 
@@ -594,3 +707,8 @@ crate?** The probe now says it changes the win rate — ten points on level 7, t
 level 9, between seeking one and avoiding it. It still cannot say whether a gun swinging onto
 a red and stitching it down the lane *feels* like anything other than opening a box, and that
 is the whole case for building it.
+
+A fourth, for phase 8: **does the game read as fast?** The sim has been tuned entirely on
+outcomes — win rates, leak percentages, bodies lost — and none of that describes the feeling
+of a wall of red arriving. If the answer after phase 8 is still no, the problem is the
+camera or the scroll speed, not the shake.
