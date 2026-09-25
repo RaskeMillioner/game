@@ -52,6 +52,14 @@ describe('no-op guarantee', () => {
 });
 
 describe('level generation', () => {
+  it('every campaign level builds without throwing', () => {
+    // buildLevel throws on level data it cannot honour (a barricade the lane is
+    // too narrow for). Catch that here rather than on a player's phone.
+    for (const level of CAMPAIGN) {
+      expect(() => buildLevel(level), `level ${level.id}`).not.toThrow();
+    }
+  });
+
   it('is reproducible: the same definition generates the same level', () => {
     // The whole campaign rests on this. If level 7 is not level 7 every time,
     // a tuned win rate describes a game nobody plays.

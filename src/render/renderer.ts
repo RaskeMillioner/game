@@ -323,14 +323,20 @@ export class Renderer {
     const ly = this.hazLY;
     const rx = this.hazRX;
     const ry = this.hazRY;
+    // One polygon per contiguous run of hole samples. A pit and a barricade can
+    // both be in view with open lane between them, and joining them into one
+    // shape would read stale slots across the gap.
     let lo = -1;
-    let hi = -1;
     for (let i = 0; i <= GROUND_STEPS; i++) {
       const f = i / GROUND_STEPS;
       const dz = dzBottom + (FAR_DZ - dzBottom) * f * f;
       const worldY = proj.camY + dz;
       const hw = holeHalfWidthAt(corridor, worldY);
-      if (hw <= 0) continue;
+      if (hw <= 0) {
+        if (lo >= 0) this.fillHazardRun(lo, i - 1);
+        lo = -1;
+        continue;
+      }
       const hc = holeCentreAt(corridor, worldY);
       // Each projection read straight out into scalars: `project` hands back a
       // single reused record, which is what broke the finish line in phase 5.
@@ -341,10 +347,17 @@ export class Renderer {
       rx[i] = r.x;
       ry[i] = r.y;
       if (lo < 0) lo = i;
-      hi = i;
     }
-    if (lo < 0 || hi <= lo) return;
+    if (lo >= 0) this.fillHazardRun(lo, GROUND_STEPS);
+  }
 
+  /** Fills and outlines one run of hole samples, `lo..hi` inclusive. */
+  private fillHazardRun(lo: number, hi: number): void {
+    if (hi <= lo) return;
+    const lx = this.hazLX;
+    const ly = this.hazLY;
+    const rx = this.hazRX;
+    const ry = this.hazRY;
     const ctx = this.ctx;
     ctx.fillStyle = COL_HAZARD;
     ctx.beginPath();
@@ -356,12 +369,6 @@ export class Renderer {
 
     ctx.strokeStyle = COL_HAZARD_EDGE;
     ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(lx[lo], ly[lo]);
-    for (let i = lo + 1; i <= hi; i++) ctx.lineTo(lx[i], ly[i]);
-    ctx.lineTo(rx[hi], ry[hi]);
-    for (let i = hi - 1; i >= lo; i--) ctx.lineTo(rx[i], ry[i]);
-    ctx.closePath();
     ctx.stroke();
   }
 
@@ -925,7 +932,7 @@ export class Renderer {
    * The level select. Drawn in flat screen space with no world behind it, so it
    * shares nothing with `draw` beyond the canvas itself.
    */
-  drawMenu(layout: MenuLayout): void {
+  drawMenu(layout: MenuLayout, error: string | null = null): void {
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const s = this.canvas.width / LANE_W;
@@ -943,6 +950,11 @@ export class Renderer {
     ctx.fillStyle = '#7c8394';
     ctx.font = `600 ${Math.round(24 * s)}px system-ui, -apple-system, sans-serif`;
     ctx.fillText('SELECT A LEVEL', this.canvas.width / 2, layout.titleY + 52 * s);
+    if (error) {
+      ctx.fillStyle = COL_RED;
+      ctx.font = `600 ${Math.round(22 * s)}px system-ui, -apple-system, sans-serif`;
+      ctx.fillText(error, this.canvas.width / 2, layout.titleY + 90 * s);
+    }
 
     for (const tile of layout.tiles) {
       const cx = tile.x + tile.w / 2;

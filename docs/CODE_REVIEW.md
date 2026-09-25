@@ -24,8 +24,10 @@ npm run build        # dist/assets/index-*.js  43.94 kB / 15.46 kB gzip
 
 ## P0 — Correctness bugs
 
-### 1. Balance is silently coupled to the device's aspect ratio
+### 1. Balance is silently coupled to the device's aspect ratio — FIXED
 `src/sim/world.ts:203`, `src/sim/world.ts:313`
+
+**Fixed** in PR #9: squad/spawn distances and the grid are sized from a fixed `REF_VIEW_H` (1560).
 
 ```ts
 this.anchorY = this.cameraY + this.viewH * SQUAD_SCREEN_FRAC;   // :203
@@ -55,8 +57,10 @@ bit-identical at VIEW_H 1560), use them in `world.ts:203` and `:313`, and keep `
 for culling and `Grid.resize`. Add a test asserting a level's win rate is stable across
 `viewH ∈ {960, 1560, 2100}`.
 
-### 2. `gateFlash` fires on every objective the squad passes, collected or not
+### 2. `gateFlash` fires on every objective the squad passes, collected or not — FIXED
 `src/sim/world.ts:604-609`
+
+**Fixed** in PR #9.
 
 ```ts
 const before = this.rendered;          // capped at MAX_BLUE_RENDER (400)
@@ -82,8 +86,10 @@ this.seedNewSlots(beforeRendered);
 if (this.count > beforeCount) this.gateFlash = 0.35;
 ```
 
-### 3. Two hazards visible at once render as one garbage polygon
+### 3. Two hazards visible at once render as one garbage polygon — FIXED
 `src/render/renderer.ts:313-359`
+
+**Fixed**: `drawHazard` flushes one polygon per contiguous run of hole samples. Verified by screenshot on level 10 at camera y 13800 (pit and barricade both in view).
 
 `drawHazard` walks the ground samples, `continue`s past any sample where `holeHalfWidthAt <= 0`
 *without writing to `hazLX/hazLY/hazRX/hazRY`*, then draws a single contiguous polygon from
@@ -108,8 +114,10 @@ gap and a `FAR_DZ` of 5000 put both inside one frame's sample range.
 and flush a closed polygon (fill + stroke) whenever `hw <= 0` breaks the run, plus one flush at
 the end. Alternatively pre-zero the four arrays each frame and emit multiple subpaths.
 
-### 4. Turret bullets damage objectives (but are correctly excluded from barricades)
+### 4. Turret bullets damage objectives (but are correctly excluded from barricades) — FIXED
 `src/sim/world.ts:582-597` vs `src/sim/world.ts:672-690`
+
+**Fixed** in PR #9. Side effect: on level 7, `turret-avoid` (75%) beats `turret-seek` (65%) again.
 
 `collideBarricades` explicitly skips turret fire:
 ```ts
@@ -126,8 +134,10 @@ This also silently inflates the probe's `turret value` measurement
 **Fix.** Add `if (this.bulFromTurret[i]) continue;` to the bullet loop in `collideObjectives`,
 then re-run the probe and confirm turrets still separate `turret-seek` from `turret-avoid`.
 
-### 5. Objectives are unhittable in the 1400–1900 band
+### 5. Objectives are unhittable in the 1400–1900 band — FIXED
 `src/sim/world.ts:587`
+
+**Fixed** in PR #9: objectives are hittable out to `BULLET_RANGE`.
 
 ```ts
 if (dy < -OBJECTIVE_H || dy > 1400) continue;
@@ -140,8 +150,10 @@ through it do nothing. The magic `1400` matches no other constant in the codebas
 introduce a named `OBJECTIVE_HIT_RANGE` in `config.ts` if the shorter range is deliberate.
 Re-run the probe: this will make crates marginally easier, so check `obj-light` win rates.
 
-### 6. A malformed level definition takes down the whole app with a blank screen
+### 6. A malformed level definition takes down the whole app with a blank screen — FIXED
 `src/sim/barricades.ts:37-42`, `src/main.ts:31`
+
+**Fixed**: `levels.test.ts` builds every campaign level; `play()` catches a build failure and returns to the level select with "LEVEL N FAILED TO LOAD".
 
 `buildBarricades` throws on a barricade whose hole the corridor refused to write. That is the
 right call for a data bug — but `new World(level, viewH)` runs at module top level in

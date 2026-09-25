@@ -475,11 +475,11 @@ a turret is a friendly emitter, and a level that names neither is unchanged to t
 except that the turret stopped being *static*: it now tracks the nearest red, which is what
 turned it from a measured non-decision into the best decision on level 7.
 
-Before phase 8, `docs/CODE_REVIEW.md` is an unexecuted backlog with six P0 correctness bugs
-in it, three of which (§1 viewport-coupled balance, §4 turret bullets damaging objectives,
-§5 objectives unhittable past 1400) put wrong numbers into the probe everything else is tuned
-against. Phase 9 is blocked on it: retuning twelve levels against a probe with those bugs in
-it bakes them into the campaign.
+All six P0 correctness bugs in `docs/CODE_REVIEW.md` are fixed (§1, §2, §4, §5 in PR #9;
+§3, §6 after it). The rest of that backlog (P1–P4) is cleanup and does not block phase 9.
+One open balance question came out of §4: with turret fire no longer cracking objectives for
+free, `turret-avoid` beats `turret-seek` on level 7 again (75% against 65%), so the case for
+turrets on that level needs revisiting before phase 9 retunes it.
 
 Phase 9 inherits a working per-level harness rather than building one, and extends the
 campaign from twelve levels to twenty.

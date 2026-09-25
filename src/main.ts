@@ -28,8 +28,12 @@ let viewH = renderer.resize();
 let screen: 'menu' | 'playing' = 'menu';
 let progress: Progress = loadProgress();
 let level: LevelDef = FIRST_LEVEL;
-let world = new World(level, viewH);
+// Null until a level has built. Only the 'playing' screen reads it, and
+// `play` only switches to that screen once a world exists.
+let world: World | null = null;
 let menu: MenuLayout = buildMenu();
+/** Shown on the level select when a level failed to build. */
+let menuError: string | null = null;
 
 function buildMenu(): MenuLayout {
   return renderer.menuLayout(
@@ -39,14 +43,30 @@ function buildMenu(): MenuLayout {
   );
 }
 
+/**
+ * Starts a level. A level whose definition fails to build (a barricade the
+ * lane cannot fit, say) lands back on the select screen with a message rather
+ * than a blank canvas.
+ */
 function play(next: LevelDef): void {
+  let built: World;
+  try {
+    built = new World(next, viewH);
+  } catch (err) {
+    console.error(`Level ${next.id} failed to build`, err);
+    toMenu();
+    menuError = `LEVEL ${next.id} FAILED TO LOAD`;
+    return;
+  }
   level = next;
-  world = new World(level, viewH);
+  world = built;
+  menuError = null;
   screen = 'playing';
 }
 
 function toMenu(): void {
   menu = buildMenu();
+  menuError = null;
   screen = 'menu';
 }
 
@@ -59,7 +79,7 @@ function nextLevel(): LevelDef | undefined {
 // appear takes a minute of competent play, which makes verifying how they draw
 // impractical otherwise. Stripped from production builds by dead-code removal.
 if (import.meta.env.DEV) {
-  const hooks = window as unknown as { __world: () => World; __menu: () => MenuLayout };
+  const hooks = window as unknown as { __world: () => World | null; __menu: () => MenuLayout };
   hooks.__world = () => world;
   // The level select is canvas-drawn, so there is no element to click in a
   // browser test. Exposing the layout lets one tap a tile by its real rect
@@ -69,7 +89,7 @@ if (import.meta.env.DEV) {
 
 function onResize(): void {
   viewH = renderer.resize();
-  world.resize(viewH);
+  world?.resize(viewH);
   menu = buildMenu();
 }
 window.addEventListener('resize', onResize);
@@ -100,6 +120,7 @@ canvas.addEventListener('pointerdown', (e) => {
     if (tile && tile.unlocked) play(tile.level);
     return;
   }
+  if (!world) return;
 
   if (world.state === 'won') {
     if (renderer.menuButtonHit(p.x, p.y)) {
@@ -127,7 +148,7 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 
 canvas.addEventListener('pointermove', (e) => {
-  if (!dragging) return;
+  if (!dragging || !world) return;
   world.targetX = dragStartTarget + (e.clientX - dragStartX) * virtualPerCss() * DRAG_GAIN;
 });
 
@@ -151,7 +172,7 @@ let lastFrame = performance.now();
 
 createLoop(
   (dt) => {
-    if (screen !== 'playing') return;
+    if (screen !== 'playing' || !world) return;
     const before = world.state;
     if (keys.has('ArrowLeft')) world.targetX -= 520 * dt;
     if (keys.has('ArrowRight')) world.targetX += 520 * dt;
@@ -166,7 +187,7 @@ createLoop(
     const delta = now - lastFrame;
     lastFrame = now;
     if (delta > 0) fps += (1000 / delta - fps) * 0.08;
-    if (screen === 'menu') renderer.drawMenu(menu);
+    if (screen === 'menu' || !world) renderer.drawMenu(menu, menuError);
     else renderer.draw(world, fps);
   },
 );
