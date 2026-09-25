@@ -504,6 +504,27 @@ describe('turrets', () => {
     expect(turretShots(w).length).toBeLessThanOrEqual(1);
   }, 20_000);
 
+  it('shoots through structures rather than breaking them for free', () => {
+    const { w, turret } = armedTurret(true);
+    // A crate parked on the line between the turret and its only target.
+    const crate = w.objectives.find((o) => o.kind !== 'turret' && !o.resolved && o.y > turret.y)!;
+    Object.assign(crate, { x: turret.x, y: turret.y + 300 });
+    crate.hp = 1e6;
+    plantRed(w, turret.x, turret.y + 600);
+    // Stepped normally, not through turretShots: that clears bullets in flight,
+    // and these need to live long enough to cross the crate.
+    let inFlight = 0;
+    for (let i = 0; i < 60 && w.state === 'running'; i++) {
+      // Squad on the far side of the lane, so none of its own fire reaches the crate.
+      w.targetX = LANE_W - turret.x;
+      w.step(1 / 60);
+      for (let j = 0; j < w.bulletCount; j++) inFlight += w.bulFromTurret[j];
+    }
+    expect(inFlight).toBeGreaterThan(0);
+    expect(crate.hp).toBe(1e6);
+    expect(crate.broken).toBe(false);
+  }, 20_000);
+
   it('credits identical turret kills to two worlds built from the same level', () => {
     const level = CAMPAIGN.find((l) => (l.structures.turretFirst ?? 0) > 0)!;
     const run = () => {
@@ -572,6 +593,39 @@ describe('weapon pickups', () => {
     expect(crate.broken).toBe(false);
     expect(crate.collected).toBe(false);
     expect(w.weaponTier).toBe(0);
+  });
+});
+
+describe('viewport', () => {
+  it('plays out identically whatever shape the screen is', () => {
+    const level = CAMPAIGN[3]!;
+    const play = (viewH: number) => {
+      const w = new World(level, viewH);
+      for (let i = 0; i < 40 * 60 && w.state === 'running'; i++) {
+        seekObjectives(900)(w);
+        w.step(1 / 60);
+      }
+      return [w.state, w.count, w.kills, w.leaked, w.anchorY];
+    };
+    const tuned = play(VIEW_H);
+    expect(play(960)).toEqual(tuned);   // tablet portrait
+    expect(play(333)).toEqual(tuned);   // phone landscape
+    expect(play(2100)).toEqual(tuned);  // tall phone
+  }, 30_000);
+});
+
+describe('reward flash', () => {
+  it('stays dark passing a structure that was never broken, past the render cap', () => {
+    const w = new World(endlessLevel(11), VIEW_H);
+    const crate = w.objectives.find((o) => o.kind !== 'turret' && o.y > 2500)!;
+    crate.hp = 1e9;
+    while (!crate.resolved && w.state === 'running') {
+      w.count = MAX_BLUE_RENDER * 3;
+      w.step(1 / 60);
+    }
+    expect(crate.collected).toBe(false);
+    // 0.35 is what the flash is set to on the frame a reward lands.
+    expect(w.gateFlash).not.toBe(0.35);
   });
 });
 
