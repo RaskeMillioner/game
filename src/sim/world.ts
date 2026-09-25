@@ -3,7 +3,7 @@ import { Rng } from '../core/rng.js';
 import {
   ANCHOR_FOLLOW, BLUE_FOLLOW, BREAKTHROUGH_PAD, BULLET_RADIUS, BULLET_RANGE, CONTACT_PAD, CORPSE_LIFE,
   FIRE_COLUMN_FILL, FIRE_FAN_REF, LANE_W, MAX_BLUE_RENDER, MAX_BULLET, MAX_CORPSE, MAX_EMITTERS, MAX_RED,
-  RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_EDGE_PAD, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, SCROLL_SPEED, SQUAD_SCREEN_FRAC,
+  RED_ALIGN_MAX, RED_ALIGN_RANGE, RED_LATERAL_WEIGHT, RED_RADIUS, RED_SPAWN_EDGE_PAD, RED_SPAWN_MIN_SPREAD, RED_SPAWN_RADIUS_GAIN, RED_SPAWN_SPREAD, REF_VIEW_H, SCROLL_SPEED, SPAWN_AHEAD, SQUAD_AHEAD,
   HAZARD_RATE, SQUEEZE_LOOKAHEAD, START_BLUE, TURRET_BULLET_DAMAGE, TURRET_BULLET_SPEED, TURRET_FIRE_RATE, TURRET_RANGE, TURRET_TARGET_RANGE, WEAPONS,
 } from './config.js';
 import { ENEMIES, ENEMY_KINDS } from './enemies.js';
@@ -134,7 +134,7 @@ export class World {
     this.anchorX = centreAt(this.corridor, this.anchorY);
     this.targetX = this.anchorX;
     this.corpseAge.fill(CORPSE_LIFE);
-    this.resize(viewH);
+    this.grid.resize(Math.ceil(LANE_W / 56) + 2, Math.ceil((REF_VIEW_H + 700) / 56) + 2);
   }
 
   get rendered(): number {
@@ -190,9 +190,13 @@ export class World {
     return Math.min(1, this.anchorY / this.finishY);
   }
 
+  /**
+   * Records the viewport for the renderer. Nothing in the sim reads it: the
+   * grid, like every other distance, is sized from REF_VIEW_H so it covers
+   * the same stretch of lane on every screen.
+   */
   resize(viewH: number): void {
     this.viewH = viewH;
-    this.grid.resize(Math.ceil(LANE_W / 56) + 2, Math.ceil((viewH + 700) / 56) + 2);
   }
 
   step(dt: number): void {
@@ -200,7 +204,7 @@ export class World {
 
     this.time += dt;
     this.cameraY += SCROLL_SPEED * dt;
-    this.anchorY = this.cameraY + this.viewH * SQUAD_SCREEN_FRAC;
+    this.anchorY = this.cameraY + SQUAD_AHEAD;
     if (this.gateFlash > 0) this.gateFlash = Math.max(0, this.gateFlash - dt);
 
     this.stepAnchor(dt);
@@ -310,7 +314,7 @@ export class World {
   }
 
   private spawnWave(wave: SpawnWave): void {
-    const spawnY = this.cameraY + this.viewH + 60;
+    const spawnY = this.cameraY + SPAWN_AHEAD;
     const stats = ENEMIES[wave.type];
     const frontage = Math.min(
       RED_SPAWN_SPREAD,
@@ -584,8 +588,11 @@ export class World {
     for (const o of this.objectives) {
       if (o.resolved || o.broken) continue;
       const dy = o.y - this.anchorY;
-      if (dy < -OBJECTIVE_H || dy > 1400) continue;
+      if (dy < -OBJECTIVE_H || dy > BULLET_RANGE) continue;
       for (let i = 0; i < this.bulletCount; i++) {
+        // A turret's fire is free, so letting it crack the next structure would
+        // hand out rewards the squad never diverted a shot to earn.
+        if (this.bulFromTurret[i]) continue;
         if (Math.abs(this.bulX[i] - o.x) > halfW) continue;
         if (Math.abs(this.bulY[i] - o.y) > OBJECTIVE_H / 2) continue;
         damageObjective(o, this.bulDmg[i]);
@@ -601,12 +608,13 @@ export class World {
     for (const o of this.objectives) {
       if (o.resolved || this.anchorY < o.y) continue;
       const before = this.rendered;
+      const beforeCount = this.count;
       const overlapped = Math.abs(this.anchorX - o.x) <= this.radiusX + PICKUP_PAD;
       const result = collectObjective(o, this.count, this.weaponTier, overlapped);
       this.count = result.count;
       this.weaponTier = result.weaponTier;
       this.seedNewSlots(before);
-      if (this.count > before) this.gateFlash = 0.35;
+      if (this.count > beforeCount) this.gateFlash = 0.35;
     }
     for (const o of this.objectives) {
       if (o.flash > 0) o.flash = Math.max(0, o.flash - 1 / 30);
@@ -644,8 +652,9 @@ export class World {
   }
 
   /**
-   * Fires turrets that are active (broken, in range, not yet resolved). A
-   * turret tracks the nearest red and shoots at it: unlike the squad, which
+   * Fires turrets that are active: broken and in range, including after the
+   * squad has passed them. A turret tracks the nearest red and shoots at it:
+   * unlike the squad, which
    * fires dead forward because position *is* targeting, a turret has no
    * position to steer, so aiming is the only thing that makes it a gun rather
    * than a column of fire. Turret bullets are flat-damage and do not spend

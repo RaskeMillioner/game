@@ -9,6 +9,17 @@ export const LANE_W = 720;
 export const SCROLL_SPEED = 240;
 /** Squad sits this fraction of the view height up from the bottom. */
 export const SQUAD_SCREEN_FRAC = 0.22;
+/**
+ * The view height, in world units, the game was tuned at: a 390x844 portrait
+ * phone. The sim measures its distances from this rather than from the live
+ * viewport, so a tablet or a phone turned sideways gets the same reaction
+ * distance, and the same balance, as the device every probe run assumes.
+ */
+export const REF_VIEW_H = 1560;
+/** How far ahead of the scroll position the squad runs. */
+export const SQUAD_AHEAD = REF_VIEW_H * SQUAD_SCREEN_FRAC;
+/** How far ahead of the scroll position a wave is released. */
+export const SPAWN_AHEAD = REF_VIEW_H + 60;
 
 export const START_BLUE = 16;
 export const MAX_BLUE = 4000;
